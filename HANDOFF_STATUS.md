@@ -23,54 +23,59 @@
 
 ## 在公司服务器上试用（最短路径，不需要再改代码）
 
+**公司服务器实况（2026-09-18 实测）**：`test-car-znh-compile`，Ubuntu + **Python 3.8.10**，**没有 pip**，**没有 rg**，
+home 实际落在 `/data/home/xuhao`。因此必须走 `requirements-py38.txt` 这条路（已在本轮补齐）。
+
 ```bash
-git clone https://github.com/unclehao28/AndroidCoding.git ~/android-source-workbench
-cd ~/android-source-workbench/server
-python3 -m pip install -r requirements.txt         # 运行时依赖；需要 Python >= 3.10
-cp config.example.json config.json                 # 只改 roots，指向真实源码根
-python3 -m app --config config.json --check-config # 环境自查：引擎、rg、安卓源码标记
-./run.sh                                           # 监听 127.0.0.1:8787
-# 公司电脑：ssh -L 8787:127.0.0.1:8787 USER@SERVER，浏览器打开 http://127.0.0.1:8787/
+cd ~/android-source-workbench && git pull
+sudo apt-get install -y python3-pip        # 无 sudo 时用：curl -sS https://bootstrap.pypa.io/pip/3.8/get-pip.py -o /tmp/get-pip.py && python3 /tmp/get-pip.py --user
+cd server
+python3 -m pip install --user -r requirements-py38.txt   # Python 3.8/3.9 专用清单
+sudo apt-get install -y ripgrep            # 无 sudo 时用 DEPLOY.md 第 3 节的静态二进制
+cp config.example.json config.json         # 只改 roots，指向真实源码根
+python3 -m app --config config.json --check-config       # 环境自查：引擎、rg、安卓源码标记
+./run.sh                                                 # 自动按解释器版本选依赖清单，监听 127.0.0.1:8787
+# 公司电脑：ssh -L 8787:127.0.0.1:8787 xuhao@test-car-znh-compile → 浏览器打开 http://127.0.0.1:8787/
 ```
 
 试用范围：真实目录浏览、文件/行段读取（含 sha256 版本哈希）、全库检索与取消、路径边界防护。
 语义跳转点下去会明确显示未就绪（P2），编辑保存未开放（P4），没有索引（P3）。
 
-两个硬前提：
+两个硬前提（任一不满足就先解决，别急着启动）：
 
-1. **服务器 Python 必须 >= 3.10**（fastapi 0.141 / starlette 1.6 / uvicorn 0.53 均声明 >=3.10）。
-   若只有 3.8/3.9（如 Ubuntu 20.04），需先准备 3.10+ 解释器；把 `python3 --version` 告我，我补一套旧解释器上实测过的依赖版本。
+1. **依赖清单必须与解释器匹配**：3.8/3.9 用 `requirements-py38.txt`，>= 3.10 用 `requirements.txt`。
+   3.8 上装 `requirements.txt` 会直接失败（fastapi 0.141 要求 >=3.10）。
 2. **建议装 ripgrep**：缺 `rg` 时用受限 Python 扫描，AOSP 上会因 `pythonMaxFiles` 上限提前截断（界面显示"结果已截断"）。
-   `sudo apt-get install -y ripgrep`，或放一个静态二进制到 `PATH`。
 
 ## 验证记录（全部为真实执行）
 
 | 命令 | 结果 |
 |---|---|
 | GitHub 全新 clone 后复核（HEAD 06f75e4） | 52 个文件齐全；`run.sh` 为 100755 且无 CR；`--check-config` 通过；pytest 89 项 0 失败；启动后 HTTP 验收 21/21 |
+| 本轮 3.8 兼容改动后（本机 3.13） | pytest **93 项 / 0 失败 / 3 skipped**；`--check-config` 通过；HTTP 21/21；浏览器 17/17；`bash -n server/run.sh` 通过 |
+| 为 cp38 解析依赖 | `pip download --python-version 38 --platform manylinux2014_x86_64 --only-binary=:all:` 成功解析出 fastapi 0.115.14 / starlette 0.44.0 / pydantic 2.10.6 / pydantic-core 2.27.2(cp38 wheel) / uvicorn 0.33.0 |
+| **待你在服务器上执行**：`python3 -m pip install --user -r requirements-py38-dev.txt && cd ~/android-source-workbench/server && python3 -m pytest -q` | 未执行（本机只有 3.13，Docker daemon 未启动，无法本地跑 3.8）；这是 3.8 的最终确认 |
 | `cd server && python -m pytest` | **89 项：86 passed / 3 skipped / 0 failed，4.5s**（skip=符号链接用例，Windows 无创建权限） |
 | `python scripts/check-package.py` | 通过：本地资源、3 个 JS 语法、内置示例与 `fixtures/demo-files.json` 一致、12 项导航预期坐标、C++17 语法 |
 | 启动 `python -m app`（8787）+ `python scripts/verify-p1-http.py` | **21/21**：真实读文件、全库检索跨 6 种文件类型、正则、截断、路径穿越/盘符拒绝、导航 unavailable |
 | `python scripts/verify-p1-browser.py`（本机 Chromium via CDP） | **17/17**：示例→真实切换、真实检索 12 处/6 文件、打开真实文件、点击标识符得 unavailable、真实目录树、无 JS 异常 |
 | 换目录一次性脚本（临时目录 + 中文路径 + 随机文件名） | 4/4，随后已删除该脚本 |
 
-实测输出举例：`/api/file` 返回 `sha256:2051c958f0d56…`、`encoding=utf-8`、`eol=lf`、18 行；`/api/search` 12 处/6 文件、
-引擎 `python-bounded 1`、`indexed=false`；一次 `query=display` 同时命中 `aidl/bp/cpp/java/rc/xml` 六种后缀。
+实测输出举例：`/api/file` 返回 `sha256:2051c958f0d56…`、`encoding=utf-8`、`eol=lf`、18 行；`/api/search` 12 处/6 文件、引擎 `python-bounded 1`、`indexed=false`（一次 `query=display` 同时命中 aidl/bp/cpp/java/rc/xml 六种后缀）。
 
 ## 对照 docs/ACCEPTANCE.md 的 P1 九条
 
 九条均已通过：任意源码根（换目录脚本 4/4）、真实模式不读内置 `files`、分层目录 + 行段读取（每次最多 800 行）、
 检索覆盖 Java/C/C++/AIDL/XML/Android.bp/rc、默认全库不选岗位、取消后 `activeSearches` 归零、
-空结果/超时/截断/编码不支持均有可见状态（P1 无索引因而直接标注"索引：未建立（P3）"）、
+空结果/超时/截断/编码不支持均有可见状态（P1 无索引，界面直说"索引：未建立（P3）"）、
 越界路径 400 与越界符号链接 403、默认只监听 127.0.0.1 并给出 SSH 转发命令。
-例外：符号链接越界用例在 Windows 上被跳过（无法创建符号链接），需在 Linux 上复跑一次 `pytest` 才算覆盖。
+例外：符号链接越界用例在 Windows 上被跳过，需在 Linux（服务器）上复跑 `pytest` 才算覆盖。
 
 ## 未完成（禁止对外宣称已实现）
 
 - 语义跳转（变量/参数/成员/全局/常量、声明与定义、引用）——P2；clangd/JDT LS 均未接入。
 - 全库索引与增量更新、Repo/manifest 版本一致性、个人修改覆盖层——P3。
-- 真实文件写入、保存冲突检测、可靠 diff——P4。
-- JNI / AIDL / Binder 关联分析——P5。
+- 真实文件写入、保存冲突检测、可靠 diff——P4；JNI / AIDL / Binder 关联分析——P5。
 - 真实 AOSP 源码上的性能与覆盖率、多用户与权限体系（首版不做企业平台）。
 
 ## 已知限制
@@ -81,13 +86,12 @@ python3 -m app --config config.json --check-config # 环境自查：引擎、rg�
 - 符号链接越界用例在本机被跳过（Windows 权限），必须在 Linux 复测。
 - 前端标识符点击依赖 Chrome/Edge 的 `caretRangeFromPoint`，未在其他浏览器验证。
 - 只读且无认证，默认只监听回环地址；不要把非回环地址暴露到公网。
-- 本机仍有一个后端进程监听 8787（日志 `%TEMP%\asw-server-*.log`），结束命令：
-  `Get-Process python | Where-Object {$_.CommandLine -like '*-m app*'} | Stop-Process`。
+- 本机仍有一个后端进程监听 8787（日志 `%TEMP%\asw-server-*.log`）：`Get-Process python | ? {$_.CommandLine -like '*-m app*'} | Stop-Process`。
 
 ## 下一步
 
-**立刻可做（不需要我改代码）**：按上面的最短路径部署，在公司电脑上试用 P1。同时把服务器上
-`python3 --version`、`python3 -m pip --version`、`which rg` 三条命令的输出告诉我，用于决定是否补降级依赖。
+**立刻可做（不需要我改代码）**：按上面的最短路径在服务器上部署并试用 P1，把服务器上
+`python3 -m pytest -q` 的结果发回（3.8 环境的最终确认，本机只有 3.13）。
 
 **然后推进 P2（语义导航，核心价值）**：
 
