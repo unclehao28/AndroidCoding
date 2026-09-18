@@ -58,6 +58,9 @@ P1 已实现的真实能力：健康状态、工作区列表、按层目录浏�
 
 ### Linux 服务器
 
+目录提示：`config.example.json`、`python3 -m app`、`run.sh` 都在 `server/` 下。
+在仓库根目录可以直接 `./run.sh`（自动转发到 `server/run.sh`）；要用 `python3 -m app` 必须先 `cd server`。
+
 ```bash
 cd server
 python3 -m pip install -r requirements.txt           # Python >= 3.10

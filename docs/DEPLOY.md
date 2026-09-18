@@ -187,10 +187,13 @@ python3 -m app --config config.json --check-config
 
 ## 5. 启动与客户端访问
 
-服务器上：
+注意：`config.example.json`、`python3 -m app`、`run.sh` 都在 **server/** 目录里。
+在仓库根目录可以直接用 `./run.sh`（它会转发到 `server/run.sh`）；要用 `python3 -m app` 就必须先 `cd server`。
 
 ```bash
-./run.sh                       # 或 bash run.sh；没有 config.json 时会自动用 config.example.json
+cd ~/android-source-workbench/server
+./run.sh                       # 没有 config.json 时会自动用 config.example.json（只有 fixtures 与示例远程仓）
+python3 -m app --config config.json --check-config   # 配置与环境自查（必须在 server 目录里执行）
 ```
 
 公司电脑上（复用已有的 SSH 登录，不需要额外开端口）：
