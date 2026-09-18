@@ -14,9 +14,9 @@ JNI/AIDL/Binder 关联属于 P5。点击代码里的标识符会真实请求后�
 ## 1. 服务器前置检查（三条命令）
 
 ```bash
-python3 --version          # 需要 >= 3.10（依赖声明如此，见第 6 节的降级办法）
-python3 -m pip --version   # 需要 pip
-which rg || echo "no ripgrep"
+python3 --version          # 决定用哪份依赖清单，见第 2 节
+python3 -m pip --version   # 需要 pip；没有时见第 2 节
+which rg || echo "no ripgrep"   # 建议安装，见第 3 节
 ```
 
 ## 2. 取得代码并安装依赖
@@ -24,13 +24,40 @@ which rg || echo "no ripgrep"
 ```bash
 git clone https://github.com/unclehao28/AndroidCoding.git ~/android-source-workbench
 cd ~/android-source-workbench/server
-python3 -m pip install -r requirements.txt --user     # 或用虚拟环境
+```
+
+依赖清单按解释器版本二选一（`./run.sh` 会自动选，也会打印它用了哪份）：
+
+| 服务器 Python | 依赖清单 | 说明 |
+|---|---|---|
+| >= 3.10 | `requirements.txt` | fastapi 0.141 / starlette 1.6 / uvicorn 0.53 |
+| 3.8 / 3.9（如 Ubuntu 20.04 自带 3.8.10） | `requirements-py38.txt` | fastapi 0.115 / pydantic 2.10 / uvicorn 0.33，已确认存在 cp38 的 wheel |
+
+```bash
+python3 -m pip install --user -r requirements.txt         # Python >= 3.10
+python3 -m pip install --user -r requirements-py38.txt    # Python 3.8 / 3.9
+```
+
+**如果 `python3 -m pip` 报 `No module named pip`**（Ubuntu 20.04 的常见情况），任选一种：
+
+```bash
+sudo apt-get install -y python3-pip        # 有 sudo，最省事
+# 无 sudo，但能访问外网（注意必须用 3.8 专用的 get-pip）：
+curl -sS https://bootstrap.pypa.io/pip/3.8/get-pip.py -o /tmp/get-pip.py
+python3 /tmp/get-pip.py --user
+# 公司内网源：见第 6 节
+```
+
+安装完可以自查一次（会打印 Python 版本、建议的依赖清单、检索引擎、安卓源码标记）：
+
+```bash
+python3 -m app --config config.example.json --check-config
 ```
 
 ## 3. 安装 ripgrep（强烈建议，否则整套源码上检索会被截断）
 
 Python 回退引擎有文件数上限（`pythonMaxFiles`，默认 20000），AOSP 动辄几十万文件，会提前停止并在界面上
-显示"结果已截断"。安装 `rg` 后会自动切换到 ripgrep 引擎（`/api/health` 里能看到引擎名）。
+显示"结果已截断"。安装 `rg` 后会自动切换到 ripgrep 引擎（`--check-config` 与 `/api/health` 里都能看到）。
 
 ```bash
 sudo apt-get install -y ripgrep        # Debian / Ubuntu
@@ -38,8 +65,16 @@ sudo yum install -y ripgrep            # RHEL / CentOS
 rg --version                           # 确认可用
 ```
 
-无 root 或无法联网时：在能上网的机器下载 `ripgrep-<版本>-x86_64-unknown-linux-musl.tar.gz`，
-`scp` 到服务器，解压后把 `rg` 放到 `~/bin` 并加进 `PATH`（静态二进制，无需安装）。
+无 sudo 或软件源不可用时，用静态二进制（不需要 root、不需要编译）：
+
+```bash
+mkdir -p ~/bin
+curl -sSL https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz \
+  | tar xz -C /tmp
+cp /tmp/ripgrep-15.2.0-x86_64-unknown-linux-musl/rg ~/bin/
+export PATH="$HOME/bin:$PATH"          # 建议写进 ~/.bashrc
+rg --version
+```
 
 ## 4. 配置允许访问的源码根目录
 
@@ -122,9 +157,13 @@ ssh -L 8787:127.0.0.1:8787 USER@SERVER
    `pydantic-core`、`httptools`、`watchfiles` 是编译扩展，必须用与服务器 Python 版本、架构匹配的 wheel。
    实在拿不到时可以先只装 `fastapi uvicorn`（不要 `uvicorn[standard]`）：功能一样，只是没有加速项。
 
-**Python 低于 3.10**（例如 Ubuntu 20.04 自带 3.8）：锁定的依赖组合无法安装，需要先准备 3.10+ 解释器
-（pyenv / conda / 公司内部 Python 包）。如果你只能使用 3.8 或 3.9，把 `python3 --version` 的结果告诉我，
-我会补一套在旧解释器上实际跑过测试的依赖版本。
+**Python 3.8 / 3.9**（例如 Ubuntu 20.04 自带 3.8.10）：直接用 `requirements-py38.txt`，不需要另装解释器，
+按第 2 节的说明安装即可。这一组合是 pip 针对 cp38 解析出来的：`pydantic-core 2.27.2` 有
+`cp38-manylinux2014_x86_64` 的 wheel，`uvicorn 0.33.0` 用不带 `[standard]` 的纯 Python 版本（无 httptools/watchfiles 加速项，
+功能一致）。项目代码本身已按 3.8 兼容处理：入口模块不使用 `dict[str, ...]` / `X | None` 这类 3.8 无法求值的注解，
+检索的线程池调用做了 `asyncio.to_thread` 能力探测（`server/tests/test_py38_compat.py` 会守住这两条）。
+
+如果公司要求统一用新解释器（pyenv / conda / 内部 Python 包），那就回到 `requirements.txt` 那一行。
 
 ## 7. 自检：确认真的读到了源码
 
@@ -140,13 +179,18 @@ curl -s -X POST http://127.0.0.1:8787/api/search \
 
 ```bash
 python3 scripts/verify-p1-http.py --base http://127.0.0.1:8787           # 期望 21/21
-cd server && python3 -m pytest -q                                        # 需要 requirements-dev.txt
+cd server && python3 -m pytest -q                                        # 先装测试依赖：
+#   Python >= 3.10：python3 -m pip install --user -r requirements-dev.txt
+#   Python 3.8/3.9：python3 -m pip install --user -r requirements-py38-dev.txt
 ```
 
 ## 8. 常见问题
 
 | 现象 | 原因与处理 |
 |---|---|
+| `python3 -m pip` 报 `No module named pip` | 见第 2 节：`apt install python3-pip` 或 3.8 专用的 get-pip |
+| 启动报 `缺少依赖：No module named 'fastapi'` | 用错依赖清单：3.8/3.9 必须用 `requirements-py38.txt`（`run.sh` 会自动选） |
+| `pip install` 报 `Could not find a version that satisfies...` | Python 版本与清单不匹配：3.8 装 `requirements.txt` 必然失败 |
 | 启动报 `Address already in use` | 端口被占用：`ss -ltnp \| grep 8787`，换端口或结束后占进程 |
 | 浏览器打不开页面 | 隧道未建立或本地端口冲突；确认 `ssh -L` 左侧端口在本机空闲 |
 | 页面提示「后端连接失败」 | 后端没起来或地址不对；看服务器终端输出 |

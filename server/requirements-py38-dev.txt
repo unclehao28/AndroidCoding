@@ -1,0 +1,10 @@
+# Python 3.8 / 3.9 上的测试依赖（服务器上试用不需要）
+# 安装：python3 -m pip install --user -r requirements-py38-dev.txt
+# 运行：cd server && python3 -m pytest
+#
+# 只锁定顶层包：pytest/httpx 的传递依赖交给 pip 按解释器版本自行解析
+# （在 3.8 上 pip 会自动选 cpython-3.8 可用的版本）。
+-r requirements-py38.txt
+
+pytest==8.3.5
+httpx==0.28.1

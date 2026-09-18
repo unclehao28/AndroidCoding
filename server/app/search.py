@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import fnmatch
+import functools
 import json
 import os
 import re
@@ -75,6 +76,19 @@ class SearchOutcome:
             "skipped": self.skipped,
             "reason": self.reason,
         }
+
+
+async def _run_in_thread(func, *args):
+    """在线程池里跑同步逻辑。
+
+    asyncio.to_thread 是 Python 3.9+ 才有的；公司服务器可能只有 3.8（Ubuntu 20.04 自带），
+    因此这里做一次能力探测，两边的行为都是"在线程里执行"。
+    """
+    to_thread = getattr(asyncio, "to_thread", None)
+    if to_thread is not None:
+        return await to_thread(func, *args)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, functools.partial(func, *args))
 
 
 def _display_text(text: str, max_length: int) -> tuple[str, bool]:
@@ -284,7 +298,7 @@ class PythonBoundedEngine(SearchEngine):
     async def search(self, request: SearchRequest, cancel: threading.Event) -> SearchOutcome:
         try:
             return await asyncio.wait_for(
-                asyncio.to_thread(self._scan, request, cancel),
+                _run_in_thread(self._scan, request, cancel),
                 timeout=request.timeout_seconds,
             )
         except asyncio.TimeoutError:

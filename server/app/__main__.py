@@ -41,10 +41,17 @@ def _looks_like_android_tree(root_path: Path) -> list[str]:
     return [marker for marker in ANDROID_MARKERS if (root_path / marker).exists()]
 
 
+def _requirements_file() -> str:
+    """依赖清单按解释器版本选择：3.8/3.9 不能安装 requirements.txt 里锁定的版本。"""
+    return "requirements-py38.txt" if sys.version_info < (3, 10) else "requirements.txt"
+
+
 def _print_environment(host: str, port: int) -> None:
     import platform
 
-    print(f"  Python：{platform.python_version()}（{sys.executable}）")
+    requirements = _requirements_file()
+    note = f" · 低于 3.10，依赖请用 {requirements}" if sys.version_info < (3, 10) else ""
+    print(f"  Python：{platform.python_version()}（{sys.executable}）{note}")
     try:
         from .search import detect_ripgrep
 
@@ -105,12 +112,16 @@ def main(argv: list[str] | None = None) -> int:
         print("接下来：python -m app --config " + str(config_path.name) + "   然后按上面的客户端访问命令连接")
         return 0
 
-    from .main import create_app
+    try:
+        import uvicorn
+        from .main import create_app
+    except ImportError as exc:
+        print(f"[错误] 缺少依赖：{exc}", file=sys.stderr)
+        print(f"  请先执行：{sys.executable} -m pip install --user -r {_requirements_file()}", file=sys.stderr)
+        return 3
 
     app = create_app(config)
     print("  未实现：写入（P4）、语义导航（P2）、全库索引（P3）——相关接口会明确返回未就绪")
-
-    import uvicorn
 
     uvicorn.run(app, host=host, port=port, log_level="info")
     return 0

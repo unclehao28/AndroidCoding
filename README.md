@@ -35,7 +35,8 @@ P1 已实现的真实能力：健康状态、工作区列表、按层目录浏�
 - `server/app/`：FastAPI 后端（`config.py` 配置校验、`pathtools.py` 路径与编码、`search.py` 检索引擎、`main.py` 接口）。
 - `server/tests/`：pytest 测试（配置、路径边界、接口、检索限制与取消、真实扫描取消）。
 - `server/requirements.txt`：锁定版本的后端运行时依赖（Python >= 3.10）。
-- `server/requirements-dev.txt`：测试依赖（pytest、httpx）。
+- `server/requirements-py38.txt`：Python 3.8/3.9 服务器的运行时依赖（含 cp38 的编译扩展版本）。
+- `server/requirements-dev.txt`、`server/requirements-py38-dev.txt`：测试依赖（pytest、httpx）。
 - `server/run.sh`：Linux 启动脚本。
 - `docs/DEPLOY.md`：公司服务器上的部署、试用范围、AOSP 配置与故障排查。
 - `scripts/check-package.py`：包资源与内置数据一致性检查。
@@ -58,10 +59,11 @@ P1 已实现的真实能力：健康状态、工作区列表、按层目录浏�
 
 ```bash
 cd server
-python3 -m pip install -r requirements.txt     # 运行时依赖，版本已锁定；需要 Python >= 3.10
+python3 -m pip install -r requirements.txt           # Python >= 3.10
+python3 -m pip install --user -r requirements-py38.txt   # Python 3.8/3.9（如 Ubuntu 20.04 自带的 3.8.10）
 cp config.example.json config.json             # 只改 roots：允许读取的源码根目录
 python3 -m app --config config.json --check-config   # 配置与环境自查，失败会列出全部问题
-./run.sh                                       # 或 python3 -m app --config config.json
+./run.sh                                       # 自动按解释器版本选择依赖清单后启动
 ```
 
 服务默认监听 `127.0.0.1:8787`。**不要**把源码根目录写成 `/` 或 `$HOME`：`roots` 只列出确实需要的工作区，服务不会遍历整台服务器。

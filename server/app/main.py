@@ -11,7 +11,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -52,6 +52,10 @@ class CamelModel(BaseModel):
     model_config = ConfigDict(alias_generator=_camel, populate_by_name=True, extra="forbid")
 
 
+# 注意：pydantic 与 FastAPI 会在运行时求值注解（typing.get_type_hints），
+# 因此对外暴露的模型与端点必须使用 typing.Optional/Dict 这类写法，
+# 不能用 `str | None` / `dict[str, Any]`——Python 3.8（Ubuntu 20.04 自带）
+# 无法求值这两种语法，而公司服务器上很可能只有 3.8。
 class SearchBody(CamelModel):
     query: str
     workspace: str
@@ -59,9 +63,9 @@ class SearchBody(CamelModel):
     regex: bool = False
     case_sensitive: bool = False
     whole_word: bool = False
-    include_glob: str | None = None
-    limit: int | None = None
-    request_id: str | None = None
+    include_glob: Optional[str] = None
+    limit: Optional[int] = None
+    request_id: Optional[str] = None
 
 
 class CancelBody(CamelModel):
@@ -72,8 +76,8 @@ class NavigationBody(CamelModel):
     workspace: str
     path: str
     kind: str = "definition"
-    source_version: str | None = None
-    position: dict | None = None
+    source_version: Optional[str] = None
+    position: Optional[Dict[str, Any]] = None
 
 
 def _require_root(config: AppConfig, workspace: str):
@@ -89,7 +93,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def create_app(config: AppConfig, search_manager: SearchManager | None = None) -> FastAPI:
+def create_app(config: AppConfig, search_manager: Optional[SearchManager] = None) -> FastAPI:
     manager = search_manager or SearchManager(config)
     app = FastAPI(
         title="安卓源码工作台后端",
@@ -112,7 +116,7 @@ def create_app(config: AppConfig, search_manager: SearchManager | None = None) -
         return JSONResponse(status_code=exc.status_code, content=exc.to_payload())
 
     @app.get("/api/health")
-    async def health() -> dict[str, Any]:
+    async def health() -> Dict[str, Any]:
         return {
             "status": "ok",
             "mode": "real",
@@ -133,22 +137,22 @@ def create_app(config: AppConfig, search_manager: SearchManager | None = None) -
         }
 
     @app.get("/api/workspaces")
-    async def workspaces() -> dict[str, Any]:
+    async def workspaces() -> Dict[str, Any]:
         items = [root.to_public() for root in config.roots]
         return {"workspaces": items, "count": len(items)}
 
     @app.get("/api/config")
-    async def public_config() -> dict[str, Any]:
+    async def public_config() -> Dict[str, Any]:
         return config.to_public()
 
     @app.get("/api/tree")
-    async def tree(workspace: str = Query(...), path: str = Query("")) -> dict[str, Any]:
+    async def tree(workspace: str = Query(...), path: str = Query("")) -> Dict[str, Any]:
         root = _require_root(config, workspace)
         target, rel = resolve_under_root(root.path, path)
         if not target.is_dir():
             raise not_a_file("目标是文件，不是目录", path=rel)
         limit = config.limits.max_tree_entries
-        entries: list[dict[str, Any]] = []
+        entries: List[Dict[str, Any]] = []
         truncated = False
         try:
             with os.scandir(target) as iterator:
@@ -205,12 +209,12 @@ def create_app(config: AppConfig, search_manager: SearchManager | None = None) -
         workspace: str = Query(...),
         path: str = Query(...),
         startLine: int = Query(0, ge=0),
-        lineCount: int | None = Query(None, ge=1),
-    ) -> dict[str, Any]:
+        lineCount: Optional[int] = Query(None, ge=1),
+    ) -> Dict[str, Any]:
         root = _require_root(config, workspace)
         target, rel = resolve_under_root(root.path, path)
         stat = ensure_readable_file(target, requested=rel)
-        base: dict[str, Any] = {
+        base: Dict[str, Any] = {
             "workspaceId": root.id,
             "path": rel,
             "name": target.name,
@@ -288,7 +292,7 @@ def create_app(config: AppConfig, search_manager: SearchManager | None = None) -
         }
 
     @app.post("/api/search")
-    async def search(body: SearchBody) -> dict[str, Any]:
+    async def search(body: SearchBody) -> Dict[str, Any]:
         root = _require_root(config, body.workspace)
         literal = not body.regex
         query = validate_query(body.query, literal=literal, max_length=config.limits.max_regex_length)
@@ -344,7 +348,7 @@ def create_app(config: AppConfig, search_manager: SearchManager | None = None) -
         return payload
 
     @app.post("/api/search/cancel")
-    async def cancel_search(body: CancelBody) -> dict[str, Any]:
+    async def cancel_search(body: CancelBody) -> Dict[str, Any]:
         cancelled = manager.cancel(body.request_id)
         return {
             "requestId": body.request_id,
@@ -354,7 +358,7 @@ def create_app(config: AppConfig, search_manager: SearchManager | None = None) -
         }
 
     @app.post("/api/navigation")
-    async def navigation(body: NavigationBody) -> dict[str, Any]:
+    async def navigation(body: NavigationBody) -> Dict[str, Any]:
         root = _require_root(config, body.workspace)
         resolved, rel = resolve_under_root(root.path, body.path)
         if not resolved.exists():
