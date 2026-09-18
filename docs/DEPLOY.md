@@ -142,6 +142,37 @@ python3 -m app --config config.json --sync aosp-system-core   # 只同步一个
 
 内网 GitLab 仓如果只在公司网络可达，把地址换成 SSH 形式即可；服务器上已有的免密 key 会被直接复用。
 
+## 3.5 先搞清楚源码在哪台机器、仓库地址是什么
+
+工作台需要**能读到源码文件**（P1 读文件、P2 要 clangd 与编译参数）。如果不知道源码放在哪，
+在服务器上执行这个只读脚本，它只收集证据、不写任何文件、不需要 root：
+
+```bash
+bash scripts/find-source-server.sh
+bash scripts/find-source-server.sh --deep                     # 额外扫 /，慢
+bash scripts/find-source-server.sh --probe-host 172.20.36.99  # 探测该主机是否有 Gerrit(29418)/git(9418)
+```
+
+它最有力的三类证据：
+
+| 线索 | 含义 |
+|---|---|
+| `.repo/manifest.xml` 里的 `fetch="..."` | **repo 仓库服务器基地址**（就是你要找的地址） |
+| `.repo/manifests` 的 `remote.origin.url` | manifest 仓库的完整地址 |
+| shell 历史里的 `repo init -u ...` | 最初使用的仓库地址 |
+
+它还会检查：环境变量（`ANDROID_BUILD_TOP` 等）、`git config url.*.insteadOf`、`~/.ssh/config`、`/etc/hosts`、
+NFS/CIFS 挂载（源码可能不在本机磁盘上）、docker 容器的挂载、其它用户主目录、以及本机 OpenGrok 的
+`configuration.xml` 里的 `<sourceRoot>`（那台机器上源码的绝对路径）。
+
+拿到线索后按优先级选路径：
+
+1. **源码在本机或可挂载** → 最简单：`roots[].path` 直接指向源码根，能力最全（P1/P2/P3 都能做）。
+2. **只能通过 git 访问** → 用 `roots[].git` 做**只读**浅克隆（配置注释里有 `depth` 与 `sparsePaths` 示例）。
+   克隆用的是服务器自己的 `~/.ssh` 与 credential helper，**不要**把私钥或口令写进配置或仓库。
+3. **只有 OpenGrok 网页可访问** → 需要新增一个后端适配（用 OpenGrok 的文件/检索接口）。
+   这要先把接口实测清楚再实现，目前**没有**这个能力，不要当成已支持。
+
 ## 3.6 一键准备语义跳转（推荐先跑这个）
 
 不要手工编辑 JSON——服务器上手工改配置很容易出错（占位符被原样粘贴、字段名写错、在 `vi` 里粘进 shell 命令）。

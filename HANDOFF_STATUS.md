@@ -26,11 +26,8 @@
 
 ```json
 "features": { "write": false, "navigation": true },
-"navigation": {
-  "enabled": true, "clangdPath": null, "searchDirs": ["/path/to/aosp"],
-  "backgroundIndex": false, "maxInstances": 2, "idleShutdownSeconds": 300,
-  "requestTimeoutSeconds": 20, "maxResults": 50, "pchStorage": "disk"
-}
+"navigation": { "enabled": true, "clangdPath": null, "searchDirs": ["/path/to/aosp"], "backgroundIndex": false,
+  "maxInstances": 2, "idleShutdownSeconds": 300, "requestTimeoutSeconds": 20, "maxResults": 50 }
 ```
 
 clangd 查找顺序：`clangdPath` → `PATH` → `searchDirs` 下的 AOSP `prebuilts/clang/host/linux-x86/*/bin/clangd`
@@ -54,12 +51,11 @@ python3 scripts/setup-navigation.py --print-only  # 只探测不改文件
 | `cd server && python -m pytest` | **187 项：184 passed / 3 skipped / 0 failed**（skip=Windows 无法建符号链接） |
 | 环境准备脚本（`test_navsetup.py`，20 项） | AOSP 判定（`.repo` / `prebuilts/clang` 单独命中即确定、单个通用标记不算、跳过 node_modules、深度上限）、clangd 探测与来源、按行改写保留注释、**语法损坏时备份并重建后继续跑完探测**、**路径不存在时绝不覆盖配置**、两次备份不互相覆盖、候选目录诊断 |
 | 镜像环境端到端（临时目录模拟"服务器仓库 + 一份 AOSP"） | 空配置文件 → 一次运行内完成：备份 + 重建 + 扫 2974 个目录找到 AOSP + 找到自带 clangd + 按行写入 `searchDirs`（注释保留）→ 输出验收命令；无源码时打印候选与 `find` 命令、且不硬跑验收 |
-| LSP 客户端测试（独立进程 mock LSP） | 18 项：分帧、握手、服务端请求应答、通知、单请求超时不影响进程、进程崩溃带出 stderr、多目标 |
-| 导航服务测试（真协议 + 构造结果） | 18 项：resolved/ambiguous/references 不判歧义/空结果/stale/位置越界/Java 未接入/关闭开关/实例复用/中文路径/emoji 列号/工作区外目标标记 |
+| LSP/导航测试（独立进程 mock LSP） | 36 项：分帧、握手、服务端请求应答、单请求超时不影响进程、进程崩溃带 stderr；resolved/ambiguous/references 不判歧义/空结果/stale/位置越界/Java 未接入/实例复用/中文路径/emoji 列号/工作区外目标标记 |
 | 启动服务 + `scripts/verify-p1-http.py` | **26/26**（含 Java 明确未接入、坐标基准、能力矩阵如实上报） |
 | `scripts/verify-p1-browser.py`（本机 Chromium） | **24/24**：真实点击标识符 → 真实 `/api/navigation` → 显示"未就绪 + 真实原因"，无 JS 异常 |
-| `scripts/verify-p2-navigation.py --direct --workspace fixtures`（本机） | 退出码 **2**：本机没有 clangd，脚本如实报告"clangd 可用 = FAIL"，**没有**把跑不了算成通过 |
-| 该脚本同时抓到一个回归并已修 | 为远程仓库重构时，本地 `roots[].path` 的相对路径变成按进程 cwd 解析（从别的目录运行就会报"路径不存在"）；已恢复按配置文件目录解析并加回归测试 |
+| `scripts/verify-p2-navigation.py --direct`（本机） | 退出码 **2**：本机没有 clangd，脚本如实报告 FAIL，**没有**把跑不了算成通过 |
+| `scripts/find-source-server.sh`（伪造 AOSP + manifest） | 三类证据全部提取成功：manifest 的 `fetch=`、`.repo/manifests` 的 `remote.origin.url`、历史里的 `repo init -u`；两个 shell 脚本 `bash -n` 通过 |
 
 ## 未完成（禁止对外宣称已实现）
 
@@ -79,19 +75,31 @@ python3 scripts/setup-navigation.py --print-only  # 只探测不改文件
 - 实例上限默认 2、空闲 300 秒关闭；`/api/health` 的 `navigation.manager.instances` 可看到当前进程与请求数。
 - 只有只读能力、无认证，默认只监听回环地址。
 
+## 公司侧环境现状（2026-09-18 实测）
+
+- `test-car-znh-compile`：Ubuntu + Python 3.8.10、**无 pip、无 rg、没有 AOSP 源码**（已用它跑过探测）。
+- 内网有 OpenGrok 1.14.13（Tomcat 10.1.55）在 `http://172.20.36.99:8081/source/`，索引的是 AOSP12。
+  OpenGrok 是浏览/检索服务，**不能 `git clone`**。
+- git/repo 服务器地址待确认。查法：`bash scripts/find-source-server.sh`（读 checkout 里的
+  `.repo/manifest.xml` 的 `fetch=`、`.repo/manifests` 的 `remote.origin.url`、shell 历史里的 `repo init -u`）。
+  本机用伪造的 AOSP 验证过三类证据都能提取。
+- 三条可行路径，按优先级：**A** 把工作台部署到源码所在机器（`roots` 直接指向源码根，能力最全）→
+  **C** 用 `roots[].git` 只读浅克隆（P1 已支持，注意 AOSP 体积与 sparsePaths）→
+  **B** 若只能访问 OpenGrok，则新增一个 `opengrok` 后端（用它的 raw 文件接口取内容、搜索接口做检索），
+  需要先实测接口再实现，不能在没验证的情况下宣称可用。
+
 ## 下一步
 
-1. **你**：在服务器上执行两条命令，把输出发我：
+1. **你**：先确认源码在哪台机器、git 地址是什么：
 
    ```bash
    cd ~/android-source-workbench && git pull
-   python3 scripts/setup-navigation.py --acceptance     # 找 AOSP/clangd、写配置、跑 12 条预期
+   bash scripts/find-source-server.sh                    # 没有 checkout 时会说"没找到"
+   bash scripts/find-source-server.sh --probe-host 172.20.36.99   # 看是否有 Gerrit(29418)/git(9418)
+   python3 scripts/setup-navigation.py --acceptance      # 找 AOSP/clangd、写配置、跑 12 条预期
    ```
 
-   如果它说"还差 clangd"或没有找到源码，把完整输出发我——脚本会把候选目录和可复制的命令都打出来
-   （`--depth 6` 可以扫得更深）。服务器上没有源码时，先用它打印的
-   `find / -maxdepth 5 -type d -name prebuilts` 确认源码到底在哪台机器上。
-   然后在页面上点几个真实 `frameworks/base` 的 C++ 符号，告诉我哪些跳得准、哪些为空。
-2. **我**：按你的反馈修 P2 的解析问题（例如加 `--query-driver`、compdb 路径探测、超时调整），
-   然后做 Java 半边（JDT LS + Soong 导入适配，会单独记录支持矩阵与失败诊断）。
-3. 之后进入 P3（Zoekt 索引），需要你给的源码规模数据（文件数、数据量、机器配置、是否 repo 管理）。
+   把输出发我。然后在页面上点几个真实 `frameworks/base` 的 C++ 符号，告诉我哪些跳得准、哪些为空。
+2. **我**：按反馈修 P2 解析问题（`--query-driver`、compdb 探测、超时调整），再做 Java 半边
+   （JDT LS + Soong 导入适配，单独记录支持矩阵与失败诊断）。
+3. 之后进入 P3（Zoekt 索引），需要源码规模数据（文件数、数据量、机器配置、是否 repo 管理）。
