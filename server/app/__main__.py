@@ -46,7 +46,7 @@ def _requirements_file() -> str:
     return "requirements-py38.txt" if sys.version_info < (3, 10) else "requirements.txt"
 
 
-def _print_environment(host: str, port: int) -> None:
+def _print_environment(config, host: str, port: int) -> None:
     import platform
 
     requirements = _requirements_file()
@@ -70,9 +70,38 @@ def _print_environment(host: str, port: int) -> None:
 
     git_note = git_version() or "未安装（远程仓库无法同步）"
     print(f"  git：{git_note}")
+    _print_navigation_environment(config)
     print(f"  客户端访问：ssh -L {port}:127.0.0.1:{port} USER@SERVER 然后打开 http://127.0.0.1:{port}/")
     if host != "127.0.0.1":
         print(f"  [提醒] 当前监听 {host}，不是回环地址；P1 没有认证，请自行确认网络边界")
+
+
+def _print_navigation_environment(config) -> None:
+    """语义跳转（P2）：clangd 找不到是头号阻塞点，必须在自查里说清楚。"""
+    from .lsp.manager import find_clangd
+
+    search_dirs = [Path(item).expanduser() for item in config.navigation.search_dirs]
+    search_dirs += [root.path for root in config.roots]
+    executable, version, source = find_clangd(config.navigation.clangd_path, search_dirs)
+    if not config.features.navigation or not config.navigation.enabled:
+        print("  语义跳转：已在配置中关闭（features.navigation / navigation.enabled）")
+        return
+    if executable:
+        print(f"  语义跳转：clangd {version}（{executable} · 来源：{source}）")
+        compile_dirs = [root.compile_commands_dir for root in config.roots if root.compile_commands_dir]
+        if config.navigation.compile_commands_dir:
+            compile_dirs.append(config.navigation.compile_commands_dir)
+        if compile_dirs:
+            print(f"    compile_commands 目录：{', '.join(compile_dirs)}")
+        else:
+            print("    [提醒] 未配置 compile_commands 目录：跨文件/宏相关的跳转可能不准；AOSP 可用 Soong 的 compdb")
+        print(f"    验收：python3 scripts/verify-p2-navigation.py --direct --workspace {config.roots[0].id}")
+    else:
+        print(f"  语义跳转：未找到 clangd（{source}）")
+        print("    [提醒] C/C++ 跳转会返回未就绪。三种做法：")
+        print("            1) navigation.searchDirs 指向 AOSP 根目录，直接复用 prebuilts/clang/host/linux-x86/*/bin/clangd")
+        print("            2) navigation.clangdPath 直接写 clangd 绝对路径")
+        print("            3) 把 clangd 放进 PATH")
 
 
 def _print_git_status(config) -> int:
@@ -202,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"    - {root.id}: {root.path}（readonly={root.readonly}）{hint}")
     for warning in config.warnings:
         print(f"  [警告] {warning}")
-    _print_environment(host, port)
+    _print_environment(config, host, port)
 
     if args.check_config:
         print("环境自查与配置校验通过（--check-config，未启动服务）")
