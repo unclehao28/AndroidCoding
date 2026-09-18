@@ -8,8 +8,9 @@ def test_health_reports_real_mode_and_unimplemented_features(client):
     body = client.get("/api/health").json()
     assert body["status"] == "ok"
     assert body["mode"] == "real"
-    assert body["apiVersion"] == "p1"
-    assert body["features"] == {"write": False, "navigation": False}
+    assert body["apiVersion"] == "p2"
+    assert body["features"] == {"write": False, "navigation": True}
+    assert body["navigation"]["supported"]["cpp"]["available"] in (True, False)
     assert body["capabilities"]["index"] is False
     assert body["search"]["name"] in {"ripgrep", "python-bounded", "unavailable"}
     assert body["activeSearches"] == []
@@ -142,6 +143,7 @@ def test_read_file_hash_changes_with_content(client, sample_tree):
 
 
 def test_navigation_reports_unavailable_without_fake_targets(client):
+    """P2：Java 尚未接入语言服务，必须明确返回未就绪，且不得伪造目标。"""
     response = client.post(
         "/api/navigation",
         json={
@@ -158,9 +160,10 @@ def test_navigation_reports_unavailable_without_fake_targets(client):
     assert body["kind"] == "semantic"
     assert body["targets"] == []
     assert body["sourceVersion"] == "sha256:deadbeef"
-    assert "P1" in body["reason"]
-    assert body["features"]["navigation"] is False
+    assert "Java" in body["reason"] and "未接入" in body["reason"]
+    assert body["capability"]["navigation"] is True
     assert body["fallback"]["kind"] == "text"
+    assert body["positionUnit"] == "utf-16"
 
 
 def test_navigation_rejects_bad_path_and_unknown_workspace(client):

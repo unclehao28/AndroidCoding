@@ -1,6 +1,6 @@
 # 安卓源码工作台：原型源码与开发交接包
 
-版本：0.2.0-p1，2026-09-18。上一版为 0.1.0-prototype（只有前端示例）。
+版本：0.3.0-p2a，2026-09-18。上一版 0.2.0-p1 只有浏览/检索/读取；本版加入 C/C++ 真实语义跳转与远程仓库只读工作区。
 
 目标：源码留在 Linux 服务器，Windows 用户通过统一界面浏览、搜索、跳转和编辑整套安卓源码。浏览范围不能按 Framework、HAL、BSP 等岗位预先缩小。
 
@@ -32,7 +32,7 @@ P1 已实现的真实能力：健康状态、工作区列表、按层目录浏�
 - `prototype/api.js`：后端接口客户端（健康、工作区、目录、文件、检索、取消、导航）。
 - `prototype/app.js`：界面与两种数据来源的切换逻辑；真实模式只走 `/api`，不回退示例数据。
 - `server/config.example.json`：后端配置示例（允许的源码根、监听地址、限额、排除规则）。
-- `server/app/`：FastAPI 后端（`config.py` 配置校验、`pathtools.py` 路径与编码、`search.py` 检索引擎、`gitremote.py` 远程仓库同步、`main.py` 接口）。
+- `server/app/`：FastAPI 后端（`config.py` 配置校验、`pathtools.py` 路径与编码、`search.py` 检索引擎、`gitremote.py` 远程仓库同步、`navigation.py` 语义跳转、`lsp/` LSP 客户端与进程管理、`main.py` 接口）。
 - `server/config.example.json`：带注释的配置示例（支持 `//` 与 `/* */` 注释）。
 - `server/tests/`：pytest 测试（配置、路径边界、接口、检索限制与取消、真实扫描取消）。
 - `server/requirements.txt`：锁定版本的后端运行时依赖（Python >= 3.10）。
@@ -74,6 +74,22 @@ python3 -m app --config config.json --check-config   # 配置与环境自查，�
 
 在真实安卓源码上部署（含内网镜像/完全离线装依赖、ripgrep 安装、AOSP 配置建议、故障排查）见
 [`docs/DEPLOY.md`](docs/DEPLOY.md)。测试依赖是单独的 `server/requirements-dev.txt`（Python 3.8 用 `requirements-py38-dev.txt`）。
+
+### 语义导航（P2）
+
+C/C++ 通过 clangd 提供**真实的**定义/声明/引用跳转；Java/Kotlin/Rust/AIDL 尚未接入，接口会明确返回未就绪。
+服务端按 `navigation.clangdPath` → `PATH` → `navigation.searchDirs` 下的 AOSP prebuilts 查找 clangd，
+按 workspace 复用一个长期存活的进程（空闲自动关闭，实例数有上限），不会每次点击都新起进程。
+
+```bash
+# 服务器上一条命令验收（12 条预期，退出码 2 = 没找到 clangd，不算通过）
+python3 scripts/verify-p2-navigation.py --direct --workspace fixtures
+```
+
+坐标约定：接口的位置与 range 均为 **0 基行号 + 0 基 UTF-16 列号**（与 LSP 及浏览器 JS 字符串一致）；
+检索结果里的 `column` 是 code point 偏移（文本匹配），不要混用。多目标时返回 `ambiguous` 让你选择，
+不会默认取第一个；请求携带的源码版本与服务器不一致时返回 `stale`。配置与 compile_commands 说明见
+[`docs/DEPLOY.md`](docs/DEPLOY.md) 第 3.6 节。
 
 ### 远程 / 内网仓库作为只读工作区
 
@@ -124,7 +140,7 @@ ssh -L 8787:127.0.0.1:8787 USER@SERVER
 | GET | `/api/file?workspace=&path=&startLine=&lineCount=` | 按行段读取，返回 sha256、编码、行尾、总行数 |
 | POST | `/api/search` | `query`/`workspace`/`scope`/`regex`/`caseSensitive`/`wholeWord`/`includeGlob`/`limit`/`requestId` |
 | POST | `/api/search/cancel` | 按 `requestId` 终止正在运行的检索进程 |
-| POST | `/api/navigation` | P1 固定返回 `status=unavailable`、`kind=semantic`、`targets=[]`，不伪造跳转 |
+| POST | `/api/navigation` | 语义跳转：`workspace`/`path`/`kind`(definition/declaration/references)/`position`/`sourceVersion`；返回 `resolved/ambiguous/unavailable/stale`，目标来自真实语言服务 |
 
 约定：目录/文件接口的行号从 0 开始；检索结果的 `column` 是行内 Unicode 码点偏移（文本匹配），P2 的导航结果才使用 LSP 的 UTF-16 坐标。`/api/search` 的回答里 `indexed=false`，表示没有索引、只是受限扫描。
 

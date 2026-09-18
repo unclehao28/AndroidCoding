@@ -1,93 +1,76 @@
 # 当前交接状态
 
-更新时间：2026-09-18。版本 `0.2.0-p1`。当前阶段：**P1 + 远程/内网仓库只读工作区**（本轮新增），可从远程仓库复现。
+更新时间：2026-09-18。版本 `0.3.0-p2a`。当前阶段：**P2 上半（C/C++ 语义跳转）已完成**，Java 等语言明确未接入。
 
-## 本轮新增：远程 / 内网 Git 仓库作为只读工作区
+## 本轮完成：P2 上半 —— 真实语义跳转（clangd）
 
-背景：公司服务器账号**没有 root**（`sudo` 不可用），且希望直接看内网仓与公开 AOSP，不想手工 clone。
+原来 `/api/navigation` 固定返回 `unavailable`，现在接入了真实语言服务：
 
-- 配置：`roots[].git = {url, ref, depth, sparsePaths}` + 顶层 `cacheDir`；`path` 是 cacheDir 内的检出目录。
-  未同步的远程根目录不再报普通 404，而是 `409 workspace_not_synced`（带操作提示）。
-  配置支持 `//` 与 `/* */` 注释（字符串里的 `https://` 不受影响，报错行列号仍准确）。
-- 同步：`python3 -m app --sync [id]`（只依赖标准库 + git，装依赖之前就能用）、`--git-status`；
-  页面也有「同步远程仓库 / 取消同步」按钮并轮询 `/api/workspace/sync` 显示进度。
-- 安全边界（代码写死）：只执行 `clone` / `fetch` / `checkout --detach` / `merge --ff-only`；
-  **不** `reset --hard`、`clean`、`rebase`，**不**自动提交或推送；缓存有本地修改时拒绝更新；
-  半成品（只有 `.git` 没有 HEAD）下次同步先清除再重来；地址经白名单校验并以 argv 数组传给 git；
-  认证只用服务器既有凭据（`~/.ssh`、credential helper、`url.insteadOf`），SSH 用 `BatchMode` 快速失败，不卡交互输入。
-- 公开仓实测（2026-09-18，中国大陆网络）：清华 TUNA `mirrors.tuna.tsinghua.edu.cn/git/AOSP/...` 可 `ls-remote`（clone 会排队）；
-  GitHub `aosp-mirror` 可 `ls-remote`；`android.googlesource.com` 连接超时（21s），不要依赖它。
+- `server/app/lsp/`：LSP 协议层
+  - `protocol.py`：stdio 上的 `Content-Length` 分帧 + JSON-RPC 编解码（容忍额外头部、增量读到半个消息）；
+  - `positions.py`：UTF-16 列号 ↔ Python 字符索引（中文是 BMP、emoji 占 2 个单元，易错点有专门测试）；
+  - `client.py`：长驻子进程客户端——请求/通知/超时/进程死亡检测，**必须应答服务端请求**
+    （clangd 会发 `workspace/configuration`，不应答就会卡住）；
+  - `manager.py`：按工作区+语言管理实例（懒启动、复用、实例数上限、空闲自动关闭、文档版本管理）。
+- `server/app/navigation.py`：语义跳转服务。请求带 workspace、相对路径、文档 hash、行列、导航类型；
+  按扩展名分发语言；C/C++ 走 clangd，其他语言按支持矩阵返回未就绪并说明原因。
+- `POST /api/navigation` 返回值：`status`（resolved/ambiguous/unavailable/stale）、`kind=semantic`、
+  `targets[]`（路径 + range + evidence）、`reason`、`hints[]`、`sourceVersion`/`currentVersion`、
+  `symbol`/`symbolRange`、`server`、`positionUnit=utf-16`、`lineBase=0`、`elapsedMs`。
+- 前端：点击标识符发起真实请求；针对目标可直接跳转；`ambiguous` 时列成候选让用户选；
+  `stale` 时给"重新读取后重试"；不可用时显示真实原因与配置提示。面板顶部显示语言服务就绪状态。
+- 诚实性约束（写死在代码里）：目标位置只来自语言服务；空结果/缺编译参数/语言未接入/版本不一致
+  一律 `unavailable`/`stale` 并给出原因；**不**用同名符号或文本匹配冒充跳转；不做置信度百分比。
 
-## 无 root 部署路径（服务器：Ubuntu + Python 3.8.10，无 pip、无 rg）
+### 配置（`server/config.example.json` 已有注释）
 
-```bash
-cd ~/android-source-workbench && git pull
-sudo apt-get install -y python3-pip        # 无 sudo：curl -sS https://bootstrap.pypa.io/pip/3.8/get-pip.py -o /tmp/get-pip.py && python3 /tmp/get-pip.py --user
-cd server && python3 -m pip install --user -r requirements-py38.txt     # 3.8/3.9 专用清单
-mkdir -p ~/bin && curl -sSL https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz | tar xz -C /tmp && cp /tmp/ripgrep-15.2.0-x86_64-unknown-linux-musl/rg ~/bin/ && export PATH="$HOME/bin:$PATH"
-cp config.example.json config.json         # 只改 roots（本地目录 + git.url）
-python3 -m app --config config.json --check-config
-python3 -m app --config config.json --git-status        # 远程仓是否已同步
-./run.sh
-# 公司电脑：ssh -L 8787:127.0.0.1:8787 xuhao@test-car-znh-compile → http://127.0.0.1:8787/
+```json
+"features": { "write": false, "navigation": true },
+"navigation": {
+  "enabled": true, "clangdPath": null, "searchDirs": ["/path/to/aosp"],
+  "backgroundIndex": false, "maxInstances": 2, "idleShutdownSeconds": 300,
+  "requestTimeoutSeconds": 20, "maxResults": 50, "pchStorage": "disk"
+}
 ```
+
+clangd 查找顺序：`clangdPath` → `PATH` → `searchDirs` 下的 AOSP `prebuilts/clang/host/linux-x86/*/bin/clangd`
+（**AOSP 自带，不需要装**）。可选 `roots[].compileCommandsDir` 指向 Soong 生成的 compdb。
 
 ## 验证记录（真实执行）
 
 | 命令 | 结果 |
 |---|---|
-| `cd server && python -m pytest` | **121 项：118 passed / 3 skipped / 0 failed，约 14s**（skip=Windows 无法创建符号链接） |
-| 远程仓库测试（本地 `file://` 裸仓库，不依赖外网） | 真实 clone、稀疏检出、新增提交后 `fetch + checkout --detach` 更新、脏缓存拒绝覆盖、中断半成品清理、超时/取消、路径越界拒绝、API 端到端（同步→列目录→读文件→检索）全部通过 |
-| 启动服务 + `python scripts/verify-p1-http.py` | **26/26**（含 git 能力、远程工作区 409、本地工作区拒绝同步、同步状态接口） |
-| `python scripts/verify-p1-browser.py`（本机 Chromium via CDP） | **23/23**（含远程工作区标记、未同步提示、点同步触发服务器端 git、同步可取消、无 JS 异常） |
-| `python scripts/check-package.py` / `node --check` | 通过 |
-| **目标环境**：公司在 `test-car-znh-compile`（Ubuntu + Python 3.8.10 + git 2.25.1）执行 `python3 -m pytest -q` | 首轮 **9 项失败，暴露并修复了 4 个只在目标环境出现的问题**（见下），本机复测 125 项 0 失败；服务器重跑结果待回传 |
-| 未完成 | 对 TUNA / 内网仓的真实 clone 未跑完（TUNA 排队 `Waiting in queue`）；clangd/JDT LS 未接入 |
-
-### 目标环境（3.8 / 老 git）暴露出的问题与修复
-
-1. `asyncio.Semaphore` 在 Python 3.8/3.9 会绑定创建时的 event loop：`SearchManager.__init__` 里创建导致
-   "There is no current event loop"，跨 loop 使用还会报 "attached to a different loop"。→ 改为在真实 loop 里懒创建，
-   loop 变化时重建；新增守卫测试（两次 `asyncio.run` 复用同一 manager）。
-2. 测试夹具依赖 `init.defaultBranch`（git ≥ 2.28），服务器是 git 2.25.1 → 夹具仓库默认分支成了 `master`，
-   `ref=main` 找不到分支。→ 夹具显式 `git branch -M main`，并加测试断言夹具默认分支。
-3. `_run_streaming` 把"git 退出码非 0"也标成 `status != "ok"`，导致失败信息走了通用分支（"远端可用分支"提示永远不生效）。
-   → 状态只描述进程生命周期，退出码单独判断；clone 失败现在会列出远端可用分支。
-4. `sparse-checkout set --cone` 在老 git 上可能不被支持 → 失败时自动退回不带 `--cone` 的写法。
-   顺带修掉 ripgrep 版本解析（`ripgrep 15.2.0 (rev e89fff89ac)` 之前被解析成 `e89fff89ac)`）。
-
-服务器当前环境事实：pip 25.0.1（`--user` 装在 `/data/home/xuhao/.local`）、依赖为 `requirements-py38.txt`、
-ripgrep 15.2.0 静态二进制在 `~/bin`（`run.sh` 会自动把 `~/bin` 加进 PATH）、git 2.25.1。
+| `cd server && python -m pytest` | **165 项：162 passed / 3 skipped / 0 failed**（skip=Windows 无法建符号链接） |
+| LSP 客户端测试（独立进程 mock LSP） | 18 项：分帧、握手、服务端请求应答、通知、单请求超时不影响进程、进程崩溃带出 stderr、多目标 |
+| 导航服务测试（真协议 + 构造结果） | 18 项：resolved/ambiguous/references 不判歧义/空结果/stale/位置越界/Java 未接入/关闭开关/实例复用/中文路径/emoji 列号/工作区外目标标记 |
+| 启动服务 + `scripts/verify-p1-http.py` | **26/26**（含 Java 明确未接入、坐标基准、能力矩阵如实上报） |
+| `scripts/verify-p1-browser.py`（本机 Chromium） | **24/24**：真实点击标识符 → 真实 `/api/navigation` → 显示"未就绪 + 真实原因"，无 JS 异常 |
+| `scripts/verify-p2-navigation.py --direct --workspace fixtures`（本机） | 退出码 **2**：本机没有 clangd，脚本如实报告"clangd 可用 = FAIL"，**没有**把跑不了算成通过 |
+| 该脚本同时抓到一个回归并已修 | 为远程仓库重构时，本地 `roots[].path` 的相对路径变成按进程 cwd 解析（从别的目录运行就会报"路径不存在"）；已恢复按配置文件目录解析并加回归测试 |
 
 ## 未完成（禁止对外宣称已实现）
 
-- 语义跳转（变量/参数/成员/全局/常量、声明与定义、引用）——P2；clangd / JDT LS 均未接入。
-- 全库索引与增量更新、Repo/manifest 快照一致性、个人修改覆盖层——P3（用户核心诉求之一）。
-- 真实文件写入、保存冲突检测、可靠 diff、对远程仓提交/推送——P4。
-- JNI / AIDL / Binder 关联分析——P5；真实 AOSP 上的性能与覆盖率、多用户权限体系未做。
+- **真机 clangd 的 12 条预期尚未跑过**（本机没有 clangd；LLVM Windows 包 467–860MB，没有下载）。
+  需要你在服务器上执行：`python3 scripts/verify-p2-navigation.py --direct --workspace fixtures`。
+- Java（JDT LS + Soong/classpath 适配）、Kotlin、Rust、AIDL 的语义能力：未接入（`/api/health` 的
+  `navigation.notImplemented` 会如实列出）。
+- AOSP 真实工程的 `compile_commands.json`、`--query-driver` 等工具链适配未做。
+- 全库索引（P3）、写入与提交（P4）、JNI/Binder 关联（P5）均未开始。
 
 ## 已知限制
 
-- 远程工作区只读；`readonly: false` 会直接拒绝启动。
-- 检索仍是受限目录扫描（`indexed=false`），AOSP 规模必须等 P3；缺 `rg` 时还会被 `pythonMaxFiles` 截断。
-- 远程工作区"可用"的判定依据 git 的有效 HEAD（结果缓存 5 秒，同步结束后失效重算）：
-  被中断的 clone 留下的半成品目录会统一返回 `409 workspace_not_synced`，不会给出空目录或空结果。
-- 符号链接越界用例在 Windows 被跳过，需在 Linux 上复跑 `pytest` 才能算覆盖。
-- 前端标识符点击依赖 Chrome/Edge 的 `caretRangeFromPoint`。
-- 只读且无认证，默认只监听回环地址。
-- 本机仍有一个后端进程监听 8787：`Get-Process python | ? {$_.CommandLine -like '*-m app*'} | Stop-Process`。
+- 默认不开 `backgroundIndex`：跨编译单元的定义跳转可能为空（头文件内的声明与同 TU 内没问题）；
+  开启后资源开销很大，整套 AOSP 请谨慎。共享/远程索引属于后续工作。
+- clangd 首次请求需要加载编译参数，可能接近 `requestTimeoutSeconds`；超时只影响本次请求，不杀进程。
+- `position` 的单位是 UTF-16 列；检索结果的 `column` 是 code point（两者都已在文档与响应里标注）。
+- 实例上限默认 2、空闲 300 秒关闭；`/api/health` 的 `navigation.manager.instances` 可看到当前进程与请求数。
+- 只有只读能力、无认证，默认只监听回环地址。
 
 ## 下一步
 
-**你在服务器上做**：`git pull` → 装 pip 与 `requirements-py38.txt` → 静态 rg → 把 `roots` 改成公司源码路径
-（内网仓用 `git@gitlab.company.com:...` 形式的 `git.url`）→ `--sync` 拉一次 → `./run.sh` → 浏览器试用。
-同时把 `python3 -m pytest -q` 的结果发回（3.8 环境的最终确认）。
-
-**我这边接着做 P2（语义导航，你的核心诉求之一）**：
-
-1. 用 clangd 跑通 `fixtures/navigation-cpp` 的 12 条预期（局部/参数/成员/全局/常量、同名遮蔽、声明与定义区分）。
-   无 root 时 clangd 可以取：AOSP 自带 `prebuilts/clang/host/linux-x86/*/bin/clangd`，或 LLVM 官方静态包解压到 `~/bin`。
-2. `/api/navigation` 从固定 `unavailable` 改为真实调度：请求带 workspace、相对路径、文档 hash、行列、类型；
-   按 workspace 管理语言服务进程，控制数量与内存。
-3. UTF-16 行列转换（含中文与非 BMP 字符）测试；同名多结果按作用域/工程身份消歧，无法消歧返回 `ambiguous`。
-4. 之后是 P3 索引（Zoekt）——你明确提到的另一个核心诉求，需要先有真实 checkout 的规模数据。
+1. **你**：在服务器上跑 `python3 scripts/verify-p2-navigation.py --direct --workspace fixtures`
+   （先把 `navigation.searchDirs` 指向 AOSP 根），把输出发我——这是 P2 的最终证据；
+   顺便在页面上点几个真实 `frameworks/base` 的 C++ 符号，告诉我哪些跳得准、哪些为空。
+2. **我**：按你的反馈修 P2 的解析问题（例如加 `--query-driver`、compdb 路径探测、超时调整），
+   然后做 Java 半边（JDT LS + Soong 导入适配，会单独记录支持矩阵与失败诊断）。
+3. 之后进入 P3（Zoekt 索引），需要你给的源码规模数据（文件数、数据量、机器配置、是否 repo 管理）。

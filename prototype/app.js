@@ -14,7 +14,8 @@
   const definitions = DEMO.definitions;
 
   const WINDOW_LINES = 800;
-  const NAV_NOT_READY = '语义跳转需要语言服务（clangd / JDT LS），属于 P2，本轮未接入。';
+  const NAV_KINDS = ['definition', 'declaration', 'references'];
+  const NAV_KIND_LABELS = {definition: '定义', declaration: '声明', references: '引用'};
 
   const state = {
     dataMode: 'demo',
@@ -349,21 +350,56 @@
     if (!silent) setStatus('已发送取消：服务端会终止对应检索进程');
   }
 
-  async function requestNavigation(word, line, column) {
+  function navigationCapability() {
+    const info = (state.serverInfo && state.serverInfo.navigation) || null;
+    const cpp = info && info.supported ? info.supported.cpp : null;
+    return {info: info, cpp: cpp};
+  }
+
+  function navigationReadiness() {
+    const capability = navigationCapability();
+    if (state.dataMode !== 'real' || state.connection !== 'ready') {
+      return {ready: false, text: '后端未连接，无法判断语言服务状态'};
+    }
+    if (!capability.info) return {ready: false, text: '后端未报告 semantic 能力状态'};
+    if (!capability.info.enabled) return {ready: false, text: '语义跳转已在服务器配置中关闭（features.navigation / navigation.enabled）'};
+    if (capability.cpp && capability.cpp.available) {
+      const kinds = (capability.cpp.kinds || NAV_KINDS).map(kind => NAV_KIND_LABELS[kind] || kind).join('/');
+      return {ready: true, text: `C/C++ 就绪：${capability.cpp.server}（支持 ${kinds}）；Java/Kotlin/Rust/AIDL 未接入`};
+    }
+    return {
+      ready: false,
+      text: 'C/C++ 未就绪：服务器上没有找到 clangd',
+      hint: (capability.cpp && capability.cpp.source) || '设置 navigation.clangdPath，或用 navigation.searchDirs 指向 AOSP 根目录（自带 prebuilts/clang/host/linux-x86/*/bin/clangd）'
+    };
+  }
+
+  async function requestNavigation(word, line, column, kind) {
     state.navWord = word;
     const path = state.file && state.file.path;
     if (!path) return;
+    const requestedKind = kind || 'definition';
+    state.navPosition = {line: Math.max(0, line - 1), character: column, absoluteLine: line};
     try {
       state.nav = await api.navigation(state.apiBase, {
         workspace: state.workspace,
         path,
-        kind: 'definition',
+        kind: requestedKind,
         sourceVersion: (state.file && state.file.hash) || null,
         position: {line: Math.max(0, line - 1), character: column}
       });
-      setStatus(`跳转请求返回 ${state.nav.status}：${state.nav.reason || ''}`, 'warn');
+      const nav = state.nav;
+      const labels = {resolved: '已解析', ambiguous: '需要你选择', unavailable: '未就绪', stale: '源码版本不一致'};
+      const level = nav.status === 'resolved' ? 'ok' : (nav.status === 'stale' ? 'error' : 'warn');
+      setStatus(
+        `${NAV_KIND_LABELS[requestedKind] || requestedKind}跳转：${labels[nav.status] || nav.status}`
+        + ` · 目标 ${nav.targetCount || 0} 个 · ${nav.elapsedMs || 0}ms`
+        + (nav.server ? ` · ${nav.server.name}` : '')
+        + (nav.reason ? ` · ${nav.reason}` : ''),
+        level
+      );
     } catch (error) {
-      state.nav = {status: 'error', kind: 'semantic', reason: error.message || String(error), targets: []};
+      state.nav = {status: 'error', kind: 'semantic', reason: error.message || String(error), targets: [], targetCount: 0};
       setStatus('跳转请求失败：' + (error.message || error), 'error');
     }
     renderInspector();
@@ -666,18 +702,28 @@
     }
 
     $('cw-symbol-name').textContent = state.navWord || '（未选择标识符）';
+    const readiness = navigationReadiness();
     if (!state.nav) {
-      $('cw-relation-note').textContent = '语义能力：未接入（P2）';
-      $('cw-definitions').innerHTML = `<div class="cw-notready"><strong>未就绪</strong><div>${esc(NAV_NOT_READY)}</div><div class="cw-empty-sub">当前只提供文本检索：结果只表示字面匹配，不代表定义或引用。</div></div>`;
+      $('cw-relation-note').textContent = readiness.ready ? '语言服务已就绪，点击代码中的标识符即可跳转' : '语言服务未就绪';
+      $('cw-definitions').innerHTML = `<div class="cw-notready${readiness.ready ? '' : ''}"><strong>${readiness.ready ? '语义跳转可用' : '未就绪'}</strong><div>${esc(readiness.text)}</div>${readiness.hint ? `<div class="cw-empty-sub">${esc(readiness.hint)}</div>` : ''}<div class="cw-empty-sub">结果只来自语言服务；未接入的语言会明确返回未就绪，不会用文本匹配冒充跳转。</div></div>`;
     } else {
       const nav = state.nav;
-      $('cw-relation-note').textContent = `最近一次跳转请求：${nav.status} · ${nav.kind}`;
-      const targets = (nav.targets || []).map(target => `<button type="button" class="cw-definition cursor-interaction" data-real="${esc(target.path)}" data-line="${(target.range && target.range.start ? target.range.start.line : 0) + 1}"><span class="cw-defname">${esc(baseName(target.path))}</span><span class="cw-path">${esc(dirName(target.path))}</span><span class="cw-evidence">${esc(target.evidence || '')}</span></button>`).join('');
-      $('cw-definitions').innerHTML = `<div class="cw-notready cw-notready-${esc(nav.status)}"><strong>状态：${esc(nav.status)}</strong><div>${esc(nav.reason || '')}</div>${nav.sourceVersion ? `<div class="cw-empty-sub">请求携带版本：${esc(nav.sourceVersion)}</div>` : '<div class="cw-empty-sub">未携带源码版本</div>'}</div>${targets}`;
+      const statusLabels = {resolved: '已解析', ambiguous: '需要你选择目标', unavailable: '未就绪', stale: '源码版本不一致', error: '请求失败'};
+      $('cw-relation-note').textContent = `最近一次${NAV_KIND_LABELS[nav.requestedKind] || ''}跳转：${statusLabels[nav.status] || nav.status}`
+        + (nav.server ? ` · ${nav.server.name}` : '') + (nav.elapsedMs ? ` · ${nav.elapsedMs}ms` : '');
+      const targets = (nav.targets || []).map((target, index) => `<button type="button" class="cw-definition cursor-interaction${nav.status === 'ambiguous' ? ' cw-candidate' : ''}" data-real="${esc(target.path)}" data-line="${(target.range && target.range.start ? target.range.start.line : 0) + 1}"><span class="cw-defname">${nav.status === 'ambiguous' ? `${index + 1}. ` : ''}${esc(baseName(target.path))}${target.outsideRoot ? '（工作区外）' : ''}</span><span class="cw-path">${esc(dirName(target.path))} · L${(target.range && target.range.start ? target.range.start.line : 0) + 1}</span><span class="cw-evidence">${esc(target.evidence || '')}</span></button>`).join('');
+      const hints = (nav.hints || []).map(hint => `<div class="cw-empty-sub">· ${esc(hint)}</div>`).join('');
+      const staleAction = nav.status === 'stale'
+        ? `<div class="cw-editactions"><button type="button" class="cursor-interaction" id="cw-reload-file">重新读取该文件后重试</button></div>`
+        : '';
+      $('cw-definitions').innerHTML = `<div class="cw-notready cw-notready-${esc(nav.status)}"><strong>${esc(statusLabels[nav.status] || nav.status)}</strong>`
+        + `<div>${esc(nav.reason || '')}</div>`
+        + (nav.sourceVersion ? `<div class="cw-empty-sub">请求源码版本：${esc(String(nav.sourceVersion).slice(0, 24))}${nav.currentVersion && nav.currentVersion !== nav.sourceVersion ? `<br>服务器当前版本：${esc(String(nav.currentVersion).slice(0, 24))}` : ''}</div>` : '<div class="cw-empty-sub">本次请求未携带源码版本</div>')
+        + hints + staleAction + '</div>' + targets;
     }
     if (state.navWord && state.connection === 'ready') {
-      $('cw-refs-count').textContent = '未接入语义引用';
-      $('cw-refs').innerHTML = `<button type="button" class="cw-ref cursor-interaction" data-textsearch="${esc(state.navWord)}">在全库检索中查看「${esc(state.navWord)}」的字面匹配</button><div class="cw-note">字面匹配不等于引用：注释和字符串也会命中。</div>`;
+      $('cw-refs-count').textContent = '字面匹配入口';
+      $('cw-refs').innerHTML = `<button type="button" class="cw-ref cursor-interaction" data-textsearch="${esc(state.navWord)}">在全库检索中查看「${esc(state.navWord)}」的字面匹配</button><button type="button" class="cw-ref cursor-interaction" data-navkind="references">看看语言服务返回的引用（可能为空）</button><div class="cw-note">字面匹配不等于引用：注释和字符串也会命中。</div>`;
     } else {
       $('cw-refs-count').textContent = '—';
       $('cw-refs').innerHTML = '<div class="cw-note">点击代码中的标识符后，这里显示请求结果与文本匹配入口。</div>';
@@ -772,6 +818,12 @@
       if (target.dataset.symbol) { state.demoSymbol = target.dataset.symbol; renderInspector(); setStatus('显示 ' + state.demoSymbol + ' 的示例候选和文本出现位置'); return; }
       if (target.dataset.opensearch) { state.q = target.dataset.opensearch; state.tab = 'search'; render(); return; }
       if (target.dataset.textsearch) { state.q = target.dataset.textsearch; state.tab = 'search'; render(); runSearch(); return; }
+      if (target.dataset.navkind) {
+        const position = state.navPosition;
+        if (!position || !state.navWord) { setStatus('请先在代码中点击一个标识符', 'warn'); return; }
+        requestNavigation(state.navWord, position.absoluteLine, position.character, target.dataset.navkind);
+        return;
+      }
       if (target.dataset.trail !== undefined && target.dataset.trail !== '') {
         const point = state.trail[Number(target.dataset.trail)];
         if (point) { point.mode === 'demo' ? openDemo(point.key, point.line) : openReal(point.key, point.line); }
@@ -787,6 +839,18 @@
         case 'cw-search-cancel': cancelRunningSearch(false); renderList(); return;
         case 'cw-back': goBack(); return;
         case 'cw-loadmore': loadMoreLines(); return;
+        case 'cw-reload-file': {
+          const position = state.navPosition;
+          const path = state.file && state.file.path;
+          if (!path) return;
+          const kind = (state.nav && state.nav.requestedKind) || 'definition';
+          openReal(path, position ? position.absoluteLine : 1).then(() => {
+            if (state.navWord && state.navPosition) {
+              requestNavigation(state.navWord, state.navPosition.absoluteLine, state.navPosition.character, kind);
+            }
+          });
+          return;
+        }
         case 'cw-edit':
           if (state.dataMode === 'real') { setNotice('编辑未开放：P1 不提供真实文件写入，服务端保存与冲突检测属于 P4。'); setStatus('编辑未开放（P4）', 'warn'); return; }
           state.editing = true; state.diff = false; renderEditor(); $('cw-buffer').focus(); setStatus('正在编辑示例代码；不会写入服务器'); return;

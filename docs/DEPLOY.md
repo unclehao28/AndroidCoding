@@ -142,6 +142,50 @@ python3 -m app --config config.json --sync aosp-system-core   # 只同步一个
 
 内网 GitLab 仓如果只在公司网络可达，把地址换成 SSH 形式即可；服务器上已有的免密 key 会被直接复用。
 
+## 3.6 语义跳转（P2，C/C++）与 clangd
+
+P2 已接入 **C/C++**（clangd）；Java/Kotlin/Rust/AIDL 明确返回未就绪，不会用文本匹配冒充。
+
+服务端按这个顺序找 clangd：`navigation.clangdPath` → `PATH` → `navigation.searchDirs` 下的
+`prebuilts/clang/host/linux-x86/*/bin/clangd`。**AOSP 自带 clangd，不需要额外安装**：
+
+```bash
+ls -d /path/to/aosp/prebuilts/clang/host/linux-x86/*/bin/clangd | tail -1
+```
+
+在 `config.json` 里加（`searchDirs` 指向 AOSP 根目录即可，会自动挑最新的那个 clangd）：
+
+```json
+"navigation": {
+  "enabled": true,
+  "searchDirs": ["/home/xuhao/aosp"],
+  "backgroundIndex": false,
+  "maxInstances": 2,
+  "idleShutdownSeconds": 300
+}
+```
+
+C/C++ 的解析质量取决于编译参数，请按实际情况处理：
+
+- 有 `compile_commands.json` 时最准。AOSP 用 Soong 生成（`SOONG_GEN_COMPDB=1 m <目标>`，产物在
+  `out/soong/development/ide/compdb/compile_commands.json`），然后把 `navigation.compileCommandsDir`
+  或某个 `roots[].compileCommandsDir` 指向该目录。
+- 没有它时 clangd 仍能解析单个编译单元内的符号，但跨文件/宏相关的跳转会不准或为空；
+  此时接口返回 `unavailable` 并把"缺 compile_commands.json"作为提示给出，**不会伪造结果**。
+- 整套 AOSP 上**不要**开 `backgroundIndex`（默认关）：它会为整个工作区建索引，CPU/内存/磁盘开销很大；
+  只有需要跨文件定义跳转时才考虑打开。共享/远程索引属于后续工作。
+
+验收（在服务器上一条命令，不需要先启动服务；退出码 2 表示没找到 clangd，**不算通过**）：
+
+```bash
+cd ~/android-source-workbench
+python3 scripts/verify-p2-navigation.py --direct --workspace fixtures
+```
+
+它用真实语言服务逐条核对 `fixtures/navigation-cases.json` 里 12 条预期（局部变量、同名遮蔽、参数、
+成员、全局、常量），判定规则是"预期位置是否落在语言服务返回的范围内"，输出每条的真实状态与目标位置。
+真实 AOSP 树上的跳转请用页面点击抽查，或 `curl -X POST /api/navigation`。
+
 ## 4. 配置允许访问的源码根目录
 
 ```bash

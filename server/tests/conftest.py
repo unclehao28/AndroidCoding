@@ -88,7 +88,7 @@ def default_raw(root: Path) -> dict:
         "roots": [{"id": "sample", "name": "样例源码", "path": str(root), "readonly": True}],
         "limits": {},
         "search": {},
-        "features": {"write": False, "navigation": False},
+        "features": {"write": False, "navigation": True},
         "prototypeDir": str(REPO_ROOT / "prototype"),
     }
 

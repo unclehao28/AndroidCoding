@@ -64,7 +64,8 @@ def test_main_module_annotations_are_py38_safe():
 
 def test_no_python39_only_stdlib_apis_in_app():
     problems = []
-    for path in sorted(APP_DIR.glob("*.py")):
+    # 递归扫描（包含 app/lsp/ 这样的子包），否则新增子包会绕过这道守卫
+    for path in sorted(APP_DIR.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):

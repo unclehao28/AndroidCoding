@@ -87,10 +87,30 @@
     ]
   },
 
-  // P1 必须保持 false：写成 true 会拒绝启动（防止把未实现能力当成已开启）
+  // features.write 必须保持 false：真实写入属于 P4，写成 true 会拒绝启动。
+  // features.navigation 是语义跳转总开关，P2 已接入 C/C++（clangd）；写成 false 会整体关闭该接口。
   "features": {
     "write": false,
-    "navigation": false
+    "navigation": true
+  },
+
+  // 语义跳转（P2，C/C++ 通过 clangd）。默认保守：不起后台索引、实例数很小、空闲即关。
+  // clangdPath 空时按顺序查找：PATH → searchDirs 下的 AOSP prebuilts/clang/host/*/*/bin/clangd。
+  // 整套 AOSP 上强烈建议先用 searchDirs 指向 AOSP 根，直接复用仓库自带的 clangd。
+  "navigation": {
+    "enabled": true,
+    "clangdPath": null,
+    "searchDirs": [],
+    "clangdArgs": [],
+    "compileCommandsDir": null,
+    "backgroundIndex": false,
+    "maxInstances": 2,
+    "idleShutdownSeconds": 300,
+    "requestTimeoutSeconds": 20,
+    "initializeTimeoutSeconds": 60,
+    "maxResults": 50,
+    "pchStorage": "disk",
+    "clangdLogLevel": "error"
   },
 
   "prototypeDir": "../prototype"

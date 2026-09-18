@@ -174,12 +174,18 @@ async def run_checks(cdp: CDP, base: str) -> None:
         "return 'not-found';})()"
     )
     check("代码中可以定位标识符并触发点击", click_result not in ("not-found", None), str(click_result))
-    if not await cdp.wait_for("document.getElementById('cw-relation-note').textContent.includes('最近一次跳转请求')", "跳转请求返回状态"):
+    if not await cdp.wait_for("document.getElementById('cw-relation-note').textContent.includes('最近一次')", "跳转请求返回状态"):
         return
     definitions = await cdp.evaluate("document.getElementById('cw-definitions').textContent")
     note = await cdp.evaluate("document.getElementById('cw-relation-note').textContent")
     reported = (note + " " + definitions)
-    check("点击标识符得到 unavailable，不伪造目标", "unavailable" in reported and "P2" in reported, f"{note} / {definitions[:60]}")
+    check(
+        "点击标识符返回真实语义状态，不伪造目标",
+        "跳转" in note and ("已解析" in reported or "未就绪" in reported or "需要你选择" in reported),
+        f"{note} / {definitions[:80]}",
+    )
+    cap = await cdp.evaluate("document.getElementById('cw-refs-count').textContent")
+    check("引用面板区分语义引用与字面匹配", "字面" in cap or "引用" in cap, cap)
     refs = await cdp.evaluate("document.getElementById('cw-refs').textContent")
     check("引用面板说明字面匹配不等于引用", "不等于引用" in refs and "字面匹配" in refs, refs[:80])
 

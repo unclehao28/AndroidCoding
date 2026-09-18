@@ -16,8 +16,8 @@ from .errors import ApiError
 from .pathtools import is_within as _is_within
 from .pathtools import normalize_rel_path
 
-VERSION = "0.2.0-p1"
-API_VERSION = "p1"
+VERSION = "0.3.0-p2a"
+API_VERSION = "p2"
 
 ROOT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
@@ -98,12 +98,49 @@ class GitSource:
 
 
 @dataclass(frozen=True)
+class NavigationSettings:
+    """语言服务（语义跳转）配置。默认保守：不开后台索引，实例数很小。"""
+
+    enabled: bool = True
+    clangd_path: str | None = None
+    clangd_args: tuple[str, ...] = ()
+    search_dirs: tuple[str, ...] = ()
+    compile_commands_dir: str | None = None
+    background_index: bool = False
+    max_instances: int = 2
+    idle_shutdown_seconds: float = 300.0
+    request_timeout_seconds: float = 20.0
+    initialize_timeout_seconds: float = 60.0
+    max_results: int = 50
+    stderr_lines: int = 200
+    pch_storage: str = "disk"
+    clangd_log_level: str = "error"
+
+    def to_public(self) -> dict:
+        return {
+            "enabled": self.enabled,
+            "clangdPath": self.clangd_path,
+            "clangdArgs": list(self.clangd_args),
+            "searchDirs": list(self.search_dirs),
+            "compileCommandsDir": self.compile_commands_dir,
+            "backgroundIndex": self.background_index,
+            "maxInstances": self.max_instances,
+            "idleShutdownSeconds": self.idle_shutdown_seconds,
+            "requestTimeoutSeconds": self.request_timeout_seconds,
+            "maxResults": self.max_results,
+            "pchStorage": self.pch_storage,
+            "note": "P2 只接入 C/C++（clangd）；Java/Kotlin/Rust/AIDL 未接入，接口会明确返回未就绪",
+        }
+
+
+@dataclass(frozen=True)
 class RootConfig:
     id: str
     name: str
     path: Path
     readonly: bool
     git: GitSource | None = None
+    compile_commands_dir: str | None = None
 
     @property
     def is_remote(self) -> bool:
@@ -175,6 +212,7 @@ class AppConfig:
     search: SearchSettings
     features: Features
     prototype_dir: Path
+    navigation: NavigationSettings = NavigationSettings()
     cache_dir: Path | None = None
     warnings: tuple[str, ...] = ()
 
@@ -202,6 +240,7 @@ class AppConfig:
                 "respectIgnoreFiles": self.search.respect_ignore_files,
             },
             "features": {"write": self.features.write, "navigation": self.features.navigation},
+            "navigation": self.navigation.to_public(),
             "warnings": list(self.warnings),
         }
 
@@ -289,7 +328,106 @@ def _str_list(value: Any, where: str, problems: list[str]) -> list[str]:
     return list(value)
 
 
-ALLOWED_TOP_LEVEL = {"server", "roots", "limits", "search", "features", "prototypeDir", "cacheDir"}
+ALLOWED_TOP_LEVEL = {"server", "roots", "limits", "search", "features", "navigation", "prototypeDir", "cacheDir"}
+
+NAVIGATION_BOOL_KEYS = ("enabled", "backgroundIndex")
+NAVIGATION_INT_KEYS = {
+    "maxInstances": (1, 8),
+    "maxResults": (1, 500),
+    "stderrLines": (10, 5000),
+}
+NAVIGATION_FLOAT_KEYS = {
+    "idleShutdownSeconds": (10, 86400),
+    "requestTimeoutSeconds": (1, 600),
+    "initializeTimeoutSeconds": (1, 600),
+}
+NAVIGATION_STR_KEYS = ("clangdPath", "compileCommandsDir")
+NAVIGATION_STR_LIST_KEYS = ("clangdArgs", "searchDirs")
+PCH_STORAGE_VALUES = ("disk", "memory")
+CLANGD_LOG_LEVELS = ("error", "info", "verbose")
+
+
+def _parse_navigation(value: Any, problems: list[str], warnings: list[str]) -> NavigationSettings:
+    entry = _require_mapping(value if value is not None else {}, "navigation", problems)
+    allowed = set(NAVIGATION_BOOL_KEYS) | set(NAVIGATION_INT_KEYS) | set(NAVIGATION_FLOAT_KEYS)
+    allowed |= set(NAVIGATION_STR_KEYS) | set(NAVIGATION_STR_LIST_KEYS) | {"pchStorage", "clangdLogLevel"}
+    _check_unknown(entry, allowed, "navigation", problems)
+
+    settings: dict = {}
+    for key in NAVIGATION_BOOL_KEYS:
+        settings[key] = _bool_setting(entry.get(key), f"navigation.{key}", problems, True if key == "enabled" else False)
+    for key, (low, high) in NAVIGATION_INT_KEYS.items():
+        raw_value = entry.get(key)
+        if raw_value is None:
+            settings[key] = {"maxInstances": 2, "maxResults": 50, "stderrLines": 200}[key]
+            continue
+        number = _int_setting(raw_value, f"navigation.{key}", problems)
+        if number is None or not (low <= number <= high):
+            problems.append(f"navigation.{key} 必须在 {low}..{high} 之间")
+            number = {"maxInstances": 2, "maxResults": 50, "stderrLines": 200}[key]
+        settings[key] = number
+    defaults_float = {"idleShutdownSeconds": 300.0, "requestTimeoutSeconds": 20.0, "initializeTimeoutSeconds": 60.0}
+    for key, (low, high) in NAVIGATION_FLOAT_KEYS.items():
+        raw_value = entry.get(key)
+        if raw_value is None:
+            settings[key] = defaults_float[key]
+            continue
+        if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+            problems.append(f"navigation.{key} 必须是数字")
+            settings[key] = defaults_float[key]
+            continue
+        if not (low <= float(raw_value) <= high):
+            problems.append(f"navigation.{key} 必须在 {low}..{high} 之间")
+            settings[key] = defaults_float[key]
+            continue
+        settings[key] = float(raw_value)
+    for key in NAVIGATION_STR_KEYS:
+        raw_value = entry.get(key)
+        if raw_value is None:
+            settings[key] = None
+            continue
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            problems.append(f"navigation.{key} 必须是非空字符串")
+            settings[key] = None
+            continue
+        settings[key] = raw_value.strip()
+    for key in NAVIGATION_STR_LIST_KEYS:
+        raw_value = entry.get(key, [])
+        if not isinstance(raw_value, list) or any(not isinstance(item, str) or not item for item in raw_value):
+            problems.append(f"navigation.{key} 必须是非空字符串数组")
+            settings[key] = []
+            continue
+        settings[key] = [item.strip() for item in raw_value]
+    pch_storage = entry.get("pchStorage", "disk")
+    if pch_storage not in PCH_STORAGE_VALUES:
+        problems.append(f"navigation.pchStorage 必须是 {' 或 '.join(PCH_STORAGE_VALUES)}")
+        pch_storage = "disk"
+    log_level = entry.get("clangdLogLevel", "error")
+    if log_level not in CLANGD_LOG_LEVELS:
+        problems.append(f"navigation.clangdLogLevel 必须是 {'/'.join(CLANGD_LOG_LEVELS)}")
+        log_level = "error"
+
+    if settings["backgroundIndex"]:
+        warnings.append(
+            "navigation.backgroundIndex=true：clangd 会为整个工作区建索引，CPU/内存/磁盘开销很大，"
+            "整套 AOSP 上请谨慎开启（跨文件的定义跳转才需要它，共享/远程索引属于后续工作）"
+        )
+    return NavigationSettings(
+        enabled=settings["enabled"],
+        clangd_path=settings["clangdPath"],
+        clangd_args=tuple(settings["clangdArgs"]),
+        search_dirs=tuple(settings["searchDirs"]),
+        compile_commands_dir=settings["compileCommandsDir"],
+        background_index=settings["backgroundIndex"],
+        max_instances=settings["maxInstances"],
+        idle_shutdown_seconds=settings["idleShutdownSeconds"],
+        request_timeout_seconds=settings["requestTimeoutSeconds"],
+        initialize_timeout_seconds=settings["initializeTimeoutSeconds"],
+        max_results=settings["maxResults"],
+        stderr_lines=settings["stderrLines"],
+        pch_storage=pch_storage,
+        clangd_log_level=log_level,
+    )
 
 
 def build_config(raw: dict, *, source_path: Path) -> AppConfig:
@@ -359,7 +497,7 @@ def build_config(raw: dict, *, source_path: Path) -> AppConfig:
     for index, item in enumerate(root_section):
         where = f"roots[{index}]"
         entry = _require_mapping(item, where, problems)
-        _check_unknown(entry, {"id", "name", "path", "readonly", "git"}, where, problems)
+        _check_unknown(entry, {"id", "name", "path", "readonly", "git", "compileCommandsDir"}, where, problems)
         root_id = entry.get("id")
         if not isinstance(root_id, str) or not ROOT_ID_RE.match(root_id):
             problems.append(f"{where}.id 必须匹配 {ROOT_ID_RE.pattern}")
@@ -371,6 +509,22 @@ def build_config(raw: dict, *, source_path: Path) -> AppConfig:
 
         git_source = _parse_git_source(entry.get("git"), where, problems)
         readonly = _bool_setting(entry.get("readonly"), f"{where}.readonly", problems, True)
+        raw_compile_db = entry.get("compileCommandsDir")
+        compile_commands_dir: str | None = None
+        if raw_compile_db is not None:
+            if not isinstance(raw_compile_db, str) or not raw_compile_db.strip():
+                problems.append(f"{where}.compileCommandsDir 必须是非空字符串")
+            else:
+                candidate_db = Path(os.path.expanduser(raw_compile_db.strip()))
+                if not candidate_db.is_absolute():
+                    candidate_db = base_dir / candidate_db
+                if not candidate_db.is_dir():
+                    problems.append(
+                        f"{where}.compileCommandsDir 目录不存在：{candidate_db}"
+                        "（需要包含 compile_commands.json，AOSP 用 Soong 的 compdb 生成）"
+                    )
+                else:
+                    compile_commands_dir = str(candidate_db.resolve())
         if git_source is not None and not readonly:
             problems.append(
                 f"{where}.readonly 必须为 true：远程仓库在 P1 只有只读能力"
@@ -412,9 +566,21 @@ def build_config(raw: dict, *, source_path: Path) -> AppConfig:
             if not isinstance(name, str) or not name.strip():
                 problems.append(f"{where}.name 必须是非空字符串")
                 name = root_id
-            roots.append(RootConfig(id=root_id, name=name.strip(), path=resolved, readonly=readonly, git=git_source))
+            roots.append(
+                RootConfig(
+                    id=root_id,
+                    name=name.strip(),
+                    path=resolved,
+                    readonly=readonly,
+                    git=git_source,
+                    compile_commands_dir=compile_commands_dir,
+                )
+            )
             continue
 
+        # 本地源码根：相对路径以**配置文件所在目录**为准，不能跟着进程的当前工作目录走
+        if not candidate.is_absolute():
+            candidate = base_dir / candidate
         try:
             resolved = candidate.resolve(strict=True)
         except FileNotFoundError:
@@ -437,7 +603,8 @@ def build_config(raw: dict, *, source_path: Path) -> AppConfig:
                 id=root_id,
                 name=name.strip(),
                 path=resolved,
-                readonly=_bool_setting(entry.get("readonly"), f"{where}.readonly", problems, True),
+                readonly=readonly,
+                compile_commands_dir=compile_commands_dir,
             )
         )
 
@@ -483,11 +650,12 @@ def build_config(raw: dict, *, source_path: Path) -> AppConfig:
     features_raw = _require_mapping(raw.get("features", {}), "features", problems)
     _check_unknown(features_raw, {"write", "navigation"}, "features", problems)
     write = _bool_setting(features_raw.get("write"), "features.write", problems, False)
-    navigation = _bool_setting(features_raw.get("navigation"), "features.navigation", problems, False)
+    navigation_feature = _bool_setting(features_raw.get("navigation"), "features.navigation", problems, True)
     if write:
-        problems.append("features.write 在 P1 未实现（真实写入属于 P4），必须为 false")
-    if navigation:
-        problems.append("features.navigation 在 P1 未接入语言服务（属于 P2），必须为 false")
+        problems.append("features.write 在 P1/P2 未实现（真实写入属于 P4），必须为 false")
+    navigation_settings = _parse_navigation(raw.get("navigation"), problems, warnings)
+    if not navigation_feature and navigation_settings.enabled:
+        warnings.append("features.navigation=false：语义跳转接口会整体关闭，navigation.* 的设置将被忽略")
 
     prototype_dir_raw = raw.get("prototypeDir", "../prototype")
     if not isinstance(prototype_dir_raw, str) or not prototype_dir_raw.strip():
@@ -542,8 +710,9 @@ def build_config(raw: dict, *, source_path: Path) -> AppConfig:
             respect_ignore_files=respect_ignore_files,
             python_max_files=python_max_files,
         ),
-        features=Features(write=write, navigation=navigation),
+        features=Features(write=write, navigation=navigation_feature),
         prototype_dir=prototype_dir,
+        navigation=navigation_settings,
         cache_dir=cache_dir,
         warnings=tuple(warnings),
     )

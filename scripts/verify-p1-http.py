@@ -62,9 +62,14 @@ def main() -> int:
     check("健康状态可用", status == 200 and health.get("status") == "ok", f"HTTP {status} mode={health.get('mode')}")
     check("真实模式标记", health.get("mode") == "real", str(health.get("mode")))
     check(
-        "写入与语义导航明确为未实现",
-        health.get("features") == {"write": False, "navigation": False},
-        json.dumps(health.get("features"), ensure_ascii=False),
+        "未实现能力如实标注（写入/索引仍为 false，语义跳转已开启）",
+        health.get("features", {}).get("write") is False
+        and health.get("features", {}).get("navigation") is True
+        and health.get("capabilities", {}).get("index") is False,
+        json.dumps(
+            {"features": health.get("features"), "index": health.get("capabilities", {}).get("index")},
+            ensure_ascii=False,
+        ),
     )
     engine = health.get("search", {})
     check("报告实际检索引擎", engine.get("name") in {"ripgrep", "python-bounded", "unavailable"}, json.dumps(engine, ensure_ascii=False))
@@ -175,9 +180,23 @@ def main() -> int:
         body={"workspace": args.workspace, "path": args.path, "kind": "definition", "sourceVersion": file_body.get("hash"), "position": {"line": 6, "character": 21}},
     )
     check(
-        "语义跳转明确返回未就绪，不伪造目标",
-        status == 200 and nav.get("status") == "unavailable" and nav.get("kind") == "semantic" and nav.get("targets") == [],
-        f"status={nav.get('status')} targets={len(nav.get('targets', []))}",
+        "语义跳转在 Java 上明确返回未接入，不伪造目标",
+        status == 200 and nav.get("status") == "unavailable" and nav.get("kind") == "semantic" and nav.get("targets") == []
+        and "未接入" in (nav.get("reason") or ""),
+        f"status={nav.get('status')} targets={len(nav.get('targets', []))} reason={(nav.get('reason') or '')[:50]}",
+    )
+    check(
+        "导航结果标注坐标基准与能力来源",
+        nav.get("positionUnit") == "utf-16" and nav.get("lineBase") == 0 and "capability" in nav,
+        f"unit={nav.get('positionUnit')} capability={json.dumps(nav.get('capability', {}), ensure_ascii=False)}",
+    )
+    status, health_nav = request(base, "GET", "/api/health")
+    nav_status = health_nav.get("navigation", {})
+    check(
+        "健康状态如实报告语言服务能力矩阵",
+        "supported" in nav_status and "notImplemented" in nav_status and nav_status.get("supported", {}).get("cpp", {}).get("available")
+        in (True, False),
+        f"clangd={nav_status.get('manager', {}).get('clangd', {}).get('path')} cpp可用={nav_status.get('supported', {}).get('cpp', {}).get('available')}",
     )
 
     cancel_observed = {"status": None}

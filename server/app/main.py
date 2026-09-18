@@ -9,6 +9,7 @@ import hashlib
 import os
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -28,6 +29,8 @@ from .errors import (
     unknown_workspace,
 )
 from .gitremote import SyncManager, git_binary, git_version, read_state as read_git_state
+from .lsp.manager import LanguageServerManager
+from .navigation import NavigationService
 from .pathtools import (
     decode_source,
     detect_eol,
@@ -37,12 +40,6 @@ from .pathtools import (
     resolve_under_root,
 )
 from .search import SearchManager, SearchRequest, validate_query
-
-NOT_IMPLEMENTED_NAVIGATION = (
-    "P1 未接入语义语言服务（clangd / JDT LS 属于 P2）。"
-    "此接口只报告未就绪，不会用文本匹配或同名候选冒充跳转。"
-)
-
 
 def _camel(name: str) -> str:
     head, *rest = name.split("_")
@@ -152,10 +149,23 @@ def create_app(
     config: AppConfig,
     search_manager: Optional[SearchManager] = None,
     sync_manager: Optional[SyncManager] = None,
+    navigation_service: Optional[NavigationService] = None,
 ) -> FastAPI:
     manager = search_manager or SearchManager(config)
     syncs = sync_manager or SyncManager(config)
+    language_servers = getattr(navigation_service, "manager", None) or LanguageServerManager(
+        config.navigation, config.roots
+    )
+    navigation = navigation_service or NavigationService(config, language_servers)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        # 停机时必须关掉语言服务子进程，否则会在构建服务器上留下孤儿进程
+        await language_servers.shutdown_all()
+
     app = FastAPI(
+        lifespan=lifespan,
         title="安卓源码工作台后端",
         version=VERSION,
         description="P1：真实目录读取与受限检索。写入与语义导航尚未实现。",
@@ -171,6 +181,8 @@ def create_app(
     app.state.config = config
     app.state.search_manager = manager
     app.state.sync_manager = syncs
+    app.state.language_servers = language_servers
+    app.state.navigation = navigation
 
     @app.exception_handler(ApiError)
     async def api_error_handler(_request: Request, exc: ApiError) -> JSONResponse:
@@ -196,6 +208,7 @@ def create_app(
                 "note": "远程仓库为只读：只做 clone/fetch/merge --ff-only，不 reset --hard，不自动提交或推送",
             },
             "sync": syncs.snapshot(),
+            "navigation": navigation.status(),
             "capabilities": {
                 "write": False,
                 "navigation": False,
@@ -213,6 +226,7 @@ def create_app(
             "count": len(items),
             "cacheDir": str(config.cache_dir) if config.cache_dir else None,
             "sync": syncs.snapshot(),
+            "navigation": navigation.status(),
         }
 
     @app.post("/api/workspace/sync")
@@ -461,28 +475,35 @@ def create_app(
         }
 
     @app.post("/api/navigation")
-    async def navigation(body: NavigationBody) -> Dict[str, Any]:
+    async def navigation_lookup(body: NavigationBody) -> Dict[str, Any]:
         root = _require_root(config, body.workspace)
         resolved, rel = resolve_under_root(root.path, body.path)
         if not resolved.exists():
             raise not_found("文件不存在", path=rel)
-        return {
-            "status": "unavailable",
-            "kind": "semantic",
-            "workspaceId": root.id,
-            "sourceVersion": body.source_version,
-            "targets": [],
-            "reason": NOT_IMPLEMENTED_NAVIGATION,
-            "requestedKind": body.kind,
-            "requestedPosition": body.position,
-            "features": {"navigation": False, "phase": "P1"},
-            "fallback": {
-                "available": True,
-                "kind": "text",
-                "endpoint": "/api/search",
-                "note": "文本检索结果只表示字面匹配，不代表定义或引用",
-            },
+        if not resolved.is_file():
+            raise not_a_file("目标是目录，不是文件", path=rel)
+        if body.position is not None and not isinstance(body.position, dict):
+            raise invalid_request("position 必须是对象：{line, character}（0 基行号 + UTF-16 列）")
+        payload = await navigation.navigate(
+            root=root,
+            rel_path=rel,
+            resolved_path=resolved,
+            position=body.position or {"line": 0, "character": 0},
+            kind=body.kind,
+            source_version=body.source_version,
+        )
+        payload["fallback"] = {
+            "available": True,
+            "kind": "text",
+            "endpoint": "/api/search",
+            "note": "字面量检索结果只表示文本匹配，不代表定义或引用；注释与字符串也会命中",
         }
+        payload["capability"] = {
+            "navigation": navigation.enabled,
+            "server": (payload.get("server") or {}).get("name"),
+            "phase": "P2（C/C++ 已接入 clangd；Java/Kotlin/Rust/AIDL 未接入）",
+        }
+        return payload
 
     @app.api_route("/api/{rest:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     async def api_unknown(rest: str) -> JSONResponse:

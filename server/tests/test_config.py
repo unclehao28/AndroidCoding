@@ -18,8 +18,25 @@ def test_example_config_is_valid_and_points_at_real_dirs():
     assert [root.id for root in config.remote_roots] == ["aosp-system-core"]
     assert config.cache_dir is not None and config.cache_dir.is_dir()
     assert config.features.write is False
-    assert config.features.navigation is False
+    assert config.features.navigation is True  # P2 起语义跳转默认可开
+    assert config.navigation.enabled is True
     assert config.server.host == "127.0.0.1"
+
+
+def test_relative_roots_are_independent_of_current_working_directory(tmp_path, monkeypatch):
+    """相对 roots 必须相对配置文件所在目录解析，而不是进程 cwd。
+
+    回归背景：为远程仓库重构路径解析时，这条只留在了远程分支，导致从别的目录
+    运行（例如在仓库根目录跑脚本）会报"路径不存在"。
+    """
+    somewhere_else = tmp_path / "elsewhere"
+    somewhere_else.mkdir()
+    monkeypatch.chdir(somewhere_else)
+    config = load_config(SERVER_DIR / "config.example.json")
+    demo = config.root("demo")
+    assert demo is not None
+    assert demo.path == (REPO_ROOT / "fixtures/demo-tree").resolve()
+    assert demo.path.exists()
 
 
 def test_relative_root_paths_resolve_against_config_location():
@@ -87,13 +104,49 @@ def test_limits_out_of_range_rejected(tmp_path, sample_tree):
     assert "maxSearchResults" in messages and "rgThreads" in messages
 
 
-def test_write_and_navigation_must_stay_disabled(tmp_path, sample_tree):
+def test_write_must_stay_disabled_but_navigation_is_allowed(tmp_path, sample_tree):
     raw = default_raw(sample_tree)
     raw["features"] = {"write": True, "navigation": True}
     with pytest.raises(ConfigError) as excinfo:
         build_config(raw, source_path=tmp_path / "config.json")
     messages = " ".join(excinfo.value.messages)
-    assert "features.write" in messages and "features.navigation" in messages
+    assert "features.write" in messages
+    assert "features.navigation" not in messages  # P2 已接入，不再是错误
+
+
+def test_navigation_settings_validation(tmp_path, sample_tree):
+    raw = default_raw(sample_tree)
+    raw["navigation"] = {"maxInstances": 99, "idleShutdownSeconds": 1, "pchStorage": "tape", "clangdLogLevel": "loud"}
+    with pytest.raises(ConfigError) as excinfo:
+        build_config(raw, source_path=tmp_path / "config.json")
+    messages = " ".join(excinfo.value.messages)
+    for key in ("maxInstances", "idleShutdownSeconds", "pchStorage", "clangdLogLevel"):
+        assert key in messages
+    raw["navigation"] = {"unknownKey": 1}
+    with pytest.raises(ConfigError) as excinfo:
+        build_config(raw, source_path=tmp_path / "config.json")
+    assert any("未知字段" in message for message in excinfo.value.messages)
+
+
+def test_background_index_is_only_a_warning(tmp_path, sample_tree):
+    raw = default_raw(sample_tree)
+    raw["navigation"] = {"backgroundIndex": True}
+    config = build_config(raw, source_path=tmp_path / "config.json")
+    assert config.navigation.background_index is True
+    assert any("backgroundIndex" in warning for warning in config.warnings)
+
+
+def test_per_root_compile_commands_dir(tmp_path, sample_tree):
+    db = tmp_path / "out" / "compdb"
+    db.mkdir(parents=True)
+    raw = default_raw(sample_tree)
+    raw["roots"] = [{"id": "sample", "path": str(sample_tree), "compileCommandsDir": str(db)}]
+    config = build_config(raw, source_path=tmp_path / "config.json")
+    assert config.root("sample").compile_commands_dir == str(db.resolve())
+    raw["roots"] = [{"id": "sample", "path": str(sample_tree), "compileCommandsDir": str(tmp_path / "missing")}]
+    with pytest.raises(ConfigError) as excinfo:
+        build_config(raw, source_path=tmp_path / "config.json")
+    assert any("compileCommandsDir" in message for message in excinfo.value.messages)
 
 
 def test_search_engine_value_checked(tmp_path, sample_tree):
@@ -175,7 +228,7 @@ def test_config_path_precedence(tmp_path, monkeypatch):
 
 def test_public_config_hides_nothing_but_marks_features_disabled(config):
     public = config.to_public()
-    assert public["features"] == {"write": False, "navigation": False}
+    assert public["features"] == {"write": False, "navigation": True}
     assert public["search"]["engine"] == "auto"
     assert public["limits"]["maxSearchResults"] == 500
     json.dumps(public)  # 必须可序列化
