@@ -27,6 +27,38 @@ def build_request(config, **overrides) -> SearchRequest:
     return SearchRequest(**values)
 
 
+def test_ripgrep_version_parsing(monkeypatch):
+    """ripgrep 的 banner 是 "ripgrep 15.2.0 (rev e89fff89ac)"，不能把最后一个 token 当版本。"""
+    import subprocess
+
+    from app import search as search_module
+
+    class _Completed:
+        returncode = 0
+        stdout = "ripgrep 15.2.0 (rev e89fff89ac)\nfeatures:+pcre2\nPCRE2 10.45 is available\n"
+
+    monkeypatch.setattr(search_module.shutil, "which", lambda name: "/home/xuhao/bin/rg")
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: _Completed())
+    detected = search_module.detect_ripgrep()
+    assert detected == ("/home/xuhao/bin/rg", "15.2.0")
+
+
+def test_manager_authored_semaphore_is_created_lazily(config):
+    """Python 3.8/3.9 的 asyncio.Semaphore 会绑定创建时的 loop：
+    在 __init__ 里创建会导致"没有当前 event loop"或跨 loop 报错，所以必须延后创建。"""
+    import asyncio
+
+    from app.search import SearchManager
+
+    manager = SearchManager(config)
+    assert manager._semaphore is None, "不得在 __init__ 里创建 asyncio.Semaphore"
+    # 两次 asyncio.run 会使用两个不同的 event loop
+    for _ in range(2):
+        outcome = asyncio.run(manager.run(build_request(config, query="setBrightness", limit=1)))
+        assert outcome.status == "ok", outcome.reason
+    assert manager._semaphore is not None
+
+
 def test_python_engine_reports_timeout_instead_of_hanging(config):
     import asyncio
 

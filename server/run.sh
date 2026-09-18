@@ -13,6 +13,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# 免 root 安装的 ripgrep 一般放在 ~/bin；这里补上，避免换了 shell 之后 rg 找不到而退回慢引擎
+export PATH="$HOME/bin:$PATH"
+
 PY="${PYTHON:-python3}"
 CONFIG="${ASW_CONFIG:-config.json}"
 if [ ! -f "$CONFIG" ]; then

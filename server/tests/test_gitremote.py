@@ -109,6 +109,26 @@ def test_public_config_exposes_remote_metadata(tmp_path, git_source_repo):
 # ---------------------------------------------------------------- 同步行为
 
 
+def test_fixture_bare_repo_default_branch_is_main(git_source_repo):
+    """老 git（<2.28）不支持 init.defaultBranch，夹具必须显式改名，否则 ref=main 会找不到分支。"""
+    completed = subprocess.run(
+        ["git", "--git-dir", str(git_source_repo), "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0
+    assert completed.stdout.strip() == "main"
+
+
+def test_clone_with_wrong_ref_lists_available_branches(tmp_path, git_source_repo):
+    config, cache = make_remote_config(tmp_path, git_source_repo, ref="no-such-branch")
+    root = config.root("remote")
+    outcome = sync_root(root, cache, timeout=120)
+    assert outcome["status"] == "error"
+    assert "远端可用分支" in outcome["message"], outcome["message"]
+    assert "main" in outcome["message"]
+
+
 def test_clone_from_remote_and_read_state(tmp_path, git_source_repo):
     config, cache = make_remote_config(tmp_path, git_source_repo)
     root = config.root("remote")

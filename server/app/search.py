@@ -133,7 +133,13 @@ def detect_ripgrep() -> tuple[str, str] | None:
     if completed.returncode != 0:
         return None
     first = (completed.stdout or "").splitlines()
-    version = first[0].split()[-1] if first else "unknown"
+    banner = first[0] if first else ""
+    # 形如 "ripgrep 15.2.0 (rev e89fff89ac)"，取版本号而不是最后一个 token
+    match = re.search(r"(\d+\.\d+(?:\.\d+)?)", banner)
+    if match:
+        version = match.group(1)
+    else:
+        version = banner.split()[-1] if banner.split() else "unknown"
     return path, version
 
 
@@ -480,8 +486,20 @@ class SearchManager:
                 self.engine = RipgrepEngine(rg_info[0], rg_info[1])
             else:
                 self.engine = PythonBoundedEngine()
-        self._semaphore = asyncio.Semaphore(config.limits.max_concurrent_searches)
+        # 注意：不能在 __init__ 里建 asyncio.Semaphore。Python 3.8/3.9 的 Semaphore 会在构造时
+        # 绑定当时的 event loop，导致"没有运行中的 loop"报错，或跨 loop 使用时
+        # 报 "Future attached to a different loop"。所以延后到真正在某个 loop 里运行时再建。
+        self._semaphore: asyncio.Semaphore | None = None
+        self._semaphore_loop: asyncio.AbstractEventLoop | None = None
         self._running: dict[str, dict] = {}
+
+    def _current_semaphore(self) -> asyncio.Semaphore:
+        loop = asyncio.get_running_loop()
+        if self._semaphore is None or self._semaphore_loop is not loop:
+            # loop 变了（例如每次测试新建 TestClient）就重建，避免复用绑定到旧 loop 的信号量
+            self._semaphore = asyncio.Semaphore(self.config.limits.max_concurrent_searches)
+            self._semaphore_loop = loop
+        return self._semaphore
 
     def engine_info(self) -> dict:
         info = self.engine.info()
@@ -509,9 +527,10 @@ class SearchManager:
         # 同名 requestId 先取消，避免客户端重试时留下旧扫描
         self.cancel(request.request_id)
         entry = self._register(request)
+        semaphore = self._current_semaphore()
         try:
             try:
-                await asyncio.wait_for(self._semaphore.acquire(), timeout=max(1.0, request.timeout_seconds))
+                await asyncio.wait_for(semaphore.acquire(), timeout=max(1.0, request.timeout_seconds))
             except asyncio.TimeoutError:
                 return SearchOutcome(
                     STATUS_BUSY,
@@ -525,7 +544,7 @@ class SearchManager:
             try:
                 return await self.engine.search(request, entry["cancel"])
             finally:
-                self._semaphore.release()
+                semaphore.release()
         finally:
             self._running.pop(request.request_id, None)
 

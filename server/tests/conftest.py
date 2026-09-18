@@ -156,6 +156,8 @@ def git_source_repo(tmp_path: Path) -> Path:
     subprocess.run(["git", *identity, "init", "-q"], cwd=work, check=True, capture_output=True)
     subprocess.run(["git", *identity, "add", "-A"], cwd=work, check=True, capture_output=True)
     subprocess.run(["git", *identity, "commit", "-q", "-m", "init"], cwd=work, check=True, capture_output=True)
+    # init.defaultBranch 需要 git >= 2.28；服务器上是 2.25，所以显式改名，保证分支就是 main
+    subprocess.run(["git", "branch", "-M", "main"], cwd=work, check=True, capture_output=True)
     bare = tmp_path / "origin.git"
     subprocess.run(
         ["git", "clone", "-q", "--bare", str(work), str(bare)], check=True, capture_output=True

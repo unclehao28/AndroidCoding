@@ -168,10 +168,14 @@ def _run_streaming(
     log: list[str],
     on_line=None,
 ) -> tuple[str, int]:
-    """返回 (status, exit_code)；status 为 ok / error / cancelled / timeout。"""
+    """返回 (status, exit_code)。
+
+    status 只描述进程生命周期：ok（正常结束，退出码见 exit_code）/ cancelled / timeout / spawn-error。
+    退出码非 0 仍然算 "ok"，由调用方按 code 判断，避免把"git 报错"和"被终止"混在一起。
+    """
     binary = git_binary()
     if not binary:
-        return "error", 127
+        return "spawn-error", 127
     log.append("$ git " + " ".join(args))
     try:
         process = subprocess.Popen(
@@ -186,7 +190,7 @@ def _run_streaming(
         )
     except OSError as exc:
         log.append(f"启动 git 失败：{exc}")
-        return "error", 126
+        return "spawn-error", 126
     reader = threading.Thread(target=_pump, args=(process.stdout, log, on_line), daemon=True)
     reader.start()
     deadline = time.monotonic() + timeout
@@ -209,7 +213,19 @@ def _run_streaming(
         log.append("已终止 git（" + ("客户端取消" if status == "cancelled" else "超过时间上限") + "）")
         return status, -1
     reader.join(timeout=5)
-    return ("ok" if process.returncode == 0 else "error"), (process.returncode or 0)
+    return "ok", (process.returncode or 0)
+
+
+def remote_branch_hint(url: str, wanted: str | None) -> str:
+    """clone 失败时给出远端可用分支，避免只看到一句 "Remote branch not found"。"""
+    code, output = run_git(["ls-remote", "--heads", url], timeout=GIT_SHORT_TIMEOUT)
+    if code != 0:
+        return ""
+    heads = [line.split("refs/heads/")[-1] for line in output.splitlines() if "refs/heads/" in line][:10]
+    if not heads:
+        return ""
+    note = "，配置的 ref 不在其中" if wanted and wanted not in heads else ""
+    return f"；远端可用分支：{', '.join(heads)}{note}"
 
 
 def sync_root(
@@ -285,7 +301,11 @@ def sync_root(
         )
         if status != "ok":
             result["status"] = status
-            result["message"] = {"cancelled": "已取消", "timeout": "fetch 超时"}.get(status, "fetch 失败：请检查上面的 git 输出")
+            result["message"] = {
+                "cancelled": "已取消",
+                "timeout": "fetch 超时",
+                "spawn-error": "git 无法启动，见上面的输出",
+            }.get(status, "fetch 未完成：见上面的 git 输出")
             return result
         if code != 0:
             result["message"] = "fetch 失败：通常是网络或凭据问题，见上面的 git 输出"
@@ -305,7 +325,11 @@ def sync_root(
             )
             if status != "ok":
                 result["status"] = status
-                result["message"] = {"cancelled": "已取消", "timeout": "checkout 超时"}.get(status, "checkout 失败")
+                result["message"] = {
+                    "cancelled": "已取消",
+                    "timeout": "checkout 超时",
+                    "spawn-error": "git 无法启动，见上面的输出",
+                }.get(status, "checkout 未完成：见上面的 git 输出")
                 return result
             if code != 0:
                 result["status"] = "skipped"
@@ -324,7 +348,11 @@ def sync_root(
             )
             if status != "ok":
                 result["status"] = status
-                result["message"] = {"cancelled": "已取消", "timeout": "merge 超时"}.get(status, "merge 失败")
+                result["message"] = {
+                    "cancelled": "已取消",
+                    "timeout": "merge 超时",
+                    "spawn-error": "git 无法启动，见上面的输出",
+                }.get(status, "merge 未完成：见上面的 git 输出")
                 return result
             if code != 0:
                 result["status"] = "skipped"
@@ -350,11 +378,16 @@ def sync_root(
         status, code = _run_streaming(args, cwd=None, timeout=timeout, cancel=cancel, log=log, on_line=on_line)
         if status != "ok":
             result["status"] = status
-            result["message"] = {"cancelled": "已取消", "timeout": "clone 超过时间上限"}.get(status, "clone 失败：见上面的 git 输出")
+            result["message"] = {
+                "cancelled": "已取消",
+                "timeout": "clone 超过时间上限",
+                "spawn-error": "git 无法启动，见上面的输出",
+            }.get(status, "clone 未完成：见上面的 git 输出")
             _cleanup_failed_clone(checkout, created=True)
             return result
         if code != 0:
-            result["message"] = "clone 失败：检查地址、分支名或凭据（见上面的 git 输出）"
+            hint = remote_branch_hint(root.git.url, root.git.ref)
+            result["message"] = "clone 失败：检查地址、分支名或凭据（见上面的 git 输出）" + hint
             _cleanup_failed_clone(checkout, created=True)
             return result
         created = True
@@ -368,6 +401,18 @@ def sync_root(
                 log=log,
                 on_line=on_line,
             )
+            if status == "ok" and code != 0:
+                # 老版本 git（例如 Ubuntu 20.04 自带的 2.25）可能不认 --cone，退回基础写法
+                log.append("sparse-checkout --cone 不被当前 git 支持，改用不带 --cone 的写法重试")
+                result["steps"].append("sparse-checkout(no-cone)")
+                status, code = _run_streaming(
+                    ["sparse-checkout", "set", *root.git.sparse_paths],
+                    cwd=checkout,
+                    timeout=timeout,
+                    cancel=cancel,
+                    log=log,
+                    on_line=on_line,
+                )
             if status != "ok" or code != 0:
                 result["status"] = status if status != "ok" else "partial"
                 result["message"] = (

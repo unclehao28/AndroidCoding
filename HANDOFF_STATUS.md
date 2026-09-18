@@ -41,7 +41,23 @@ python3 -m app --config config.json --git-status        # 远程仓是否已同�
 | 启动服务 + `python scripts/verify-p1-http.py` | **26/26**（含 git 能力、远程工作区 409、本地工作区拒绝同步、同步状态接口） |
 | `python scripts/verify-p1-browser.py`（本机 Chromium via CDP） | **23/23**（含远程工作区标记、未同步提示、点同步触发服务器端 git、同步可取消、无 JS 异常） |
 | `python scripts/check-package.py` / `node --check` | 通过 |
-| 未完成 | 对 TUNA / 内网仓的真实 clone 未跑完（TUNA 排队 `Waiting in queue`），需在服务器上 `--sync` 实测；clangd/JDT LS 未接入 |
+| **目标环境**：公司在 `test-car-znh-compile`（Ubuntu + Python 3.8.10 + git 2.25.1）执行 `python3 -m pytest -q` | 首轮 **9 项失败，暴露并修复了 4 个只在目标环境出现的问题**（见下），本机复测 125 项 0 失败；服务器重跑结果待回传 |
+| 未完成 | 对 TUNA / 内网仓的真实 clone 未跑完（TUNA 排队 `Waiting in queue`）；clangd/JDT LS 未接入 |
+
+### 目标环境（3.8 / 老 git）暴露出的问题与修复
+
+1. `asyncio.Semaphore` 在 Python 3.8/3.9 会绑定创建时的 event loop：`SearchManager.__init__` 里创建导致
+   "There is no current event loop"，跨 loop 使用还会报 "attached to a different loop"。→ 改为在真实 loop 里懒创建，
+   loop 变化时重建；新增守卫测试（两次 `asyncio.run` 复用同一 manager）。
+2. 测试夹具依赖 `init.defaultBranch`（git ≥ 2.28），服务器是 git 2.25.1 → 夹具仓库默认分支成了 `master`，
+   `ref=main` 找不到分支。→ 夹具显式 `git branch -M main`，并加测试断言夹具默认分支。
+3. `_run_streaming` 把"git 退出码非 0"也标成 `status != "ok"`，导致失败信息走了通用分支（"远端可用分支"提示永远不生效）。
+   → 状态只描述进程生命周期，退出码单独判断；clone 失败现在会列出远端可用分支。
+4. `sparse-checkout set --cone` 在老 git 上可能不被支持 → 失败时自动退回不带 `--cone` 的写法。
+   顺带修掉 ripgrep 版本解析（`ripgrep 15.2.0 (rev e89fff89ac)` 之前被解析成 `e89fff89ac)`）。
+
+服务器当前环境事实：pip 25.0.1（`--user` 装在 `/data/home/xuhao/.local`）、依赖为 `requirements-py38.txt`、
+ripgrep 15.2.0 静态二进制在 `~/bin`（`run.sh` 会自动把 `~/bin` 加进 PATH）、git 2.25.1。
 
 ## 未完成（禁止对外宣称已实现）
 
