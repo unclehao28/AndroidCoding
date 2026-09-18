@@ -1,0 +1,7 @@
+# 开发/验证依赖（服务器上试用不需要装这些）
+# 安装：python3 -m pip install -r server/requirements-dev.txt
+# 运行测试：cd server && python3 -m pytest
+-r requirements.txt
+
+pytest==9.1.1
+httpx==0.28.1

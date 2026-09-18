@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from .config import API_VERSION, VERSION, ConfigError, load_config, resolve_config_path
 
@@ -19,6 +20,50 @@ def _use_utf8_console() -> None:
             pass
 
 
+ANDROID_MARKERS = (
+    ".repo",
+    "build/soong",
+    "build/make",
+    "frameworks/base",
+    "hardware/interfaces",
+    "system/core",
+    "bionic",
+    "art",
+    "packages/apps",
+    "device",
+    "vendor",
+    "kernel",
+)
+
+
+def _looks_like_android_tree(root_path: Path) -> list[str]:
+    """只做少量标记文件探测，不遍历目录（整套源码遍历成本太高）。"""
+    return [marker for marker in ANDROID_MARKERS if (root_path / marker).exists()]
+
+
+def _print_environment(host: str, port: int) -> None:
+    import platform
+
+    print(f"  Python：{platform.python_version()}（{sys.executable}）")
+    try:
+        from .search import detect_ripgrep
+
+        rg = detect_ripgrep()
+    except Exception:  # noqa: BLE001
+        rg = None
+    if rg:
+        print(f"  检索引擎：ripgrep {rg[1]}（{rg[0]}）")
+    else:
+        print("  检索引擎：未找到 rg，将退回受限的 Python 扫描")
+        print("    [提醒] Python 回退有文件数上限，整套安卓源码上结果会不完整；建议在服务器安装 ripgrep")
+        print("            Debian/Ubuntu: sudo apt-get install -y ripgrep")
+        print("            RHEL/CentOS:   sudo yum install -y ripgrep   或  dnf install -y ripgrep")
+        print("            无 root：从 https://github.com/BurntSushi/ripgrep/releases 取静态包解压后加进 PATH")
+    print(f"  客户端访问：ssh -L {port}:127.0.0.1:{port} USER@SERVER 然后打开 http://127.0.0.1:{port}/")
+    if host != "127.0.0.1":
+        print(f"  [提醒] 当前监听 {host}，不是回环地址；P1 没有认证，请自行确认网络边界")
+
+
 def main(argv: list[str] | None = None) -> int:
     _use_utf8_console()
     parser = argparse.ArgumentParser(
@@ -28,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", help="配置文件路径；默认 server/config.json，其次 server/config.example.json")
     parser.add_argument("--host", help="覆盖配置中的监听地址（默认 127.0.0.1）")
     parser.add_argument("--port", type=int, help="覆盖配置中的端口")
-    parser.add_argument("--check-config", action="store_true", help="只校验配置并退出")
+    parser.add_argument("--check-config", action="store_true", help="只校验配置、打印环境自查并退出")
     args = parser.parse_args(argv)
 
     config_path = resolve_config_path(args.config)
@@ -48,19 +93,21 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  前端目录：{config.prototype_dir}")
     print(f"  根目录：{len(config.roots)} 个")
     for root in config.roots:
-        print(f"    - {root.id}: {root.path}（readonly={root.readonly}）")
+        markers = _looks_like_android_tree(root.path)
+        hint = f" · 安卓源码标记：{', '.join(markers[:4])}{' 等' if len(markers) > 4 else ''}" if markers else " · 未发现常见安卓源码标记"
+        print(f"    - {root.id}: {root.path}（readonly={root.readonly}）{hint}")
     for warning in config.warnings:
         print(f"  [警告] {warning}")
+    _print_environment(host, port)
 
     if args.check_config:
-        print("配置校验通过（--check-config，未启动服务）")
+        print("环境自查与配置校验通过（--check-config，未启动服务）")
+        print("接下来：python -m app --config " + str(config_path.name) + "   然后按上面的客户端访问命令连接")
         return 0
 
     from .main import create_app
 
     app = create_app(config)
-    engine = app.state.search_manager.engine_info()
-    print(f"  检索引擎：{engine['name']} {engine.get('version', '')}（配置={engine['configured']}，并发上限={engine['concurrencyLimit']}）")
     print("  未实现：写入（P4）、语义导航（P2）、全库索引（P3）——相关接口会明确返回未就绪")
 
     import uvicorn

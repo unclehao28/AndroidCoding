@@ -1,14 +1,17 @@
-# 安卓源码工作台后端依赖（P1）
-# 说明：版本为实际安装并通过测试的版本，见 HANDOFF_STATUS.md 的验证记录。
-# 安装：python -m pip install -r server/requirements.txt
+# 安卓源码工作台：服务器运行时依赖（P1）
+# 这是实际安装并通过测试的版本组合，见 HANDOFF_STATUS.md 的验证记录。
+# 安装：python3 -m pip install -r server/requirements.txt
+#
+# 硬性要求：Python >= 3.10（fastapi 0.141 / starlette 1.6 / uvicorn 0.53 都声明 >=3.10）。
+# 老发行版（如 Ubuntu 20.04 自带 3.8）请先准备 3.10+ 解释器，见 docs/DEPLOY.md。
+#
+# 说明：httptools/watchfiles/websockets/python-dotenv 是 uvicorn 的可选加速项，
+# 内网无法取得这些 wheel 时，可以只装 fastapi + uvicorn（去掉 [standard]），功能不受影响。
 fastapi==0.141.1
 starlette==1.6.0
 pydantic==2.13.5
-uvicorn==0.53.0
+uvicorn[standard]==0.53.0
 httptools==0.8.0
 watchfiles==1.2.0
 websockets==17.1
 python-dotenv==1.2.3
-# 仅测试需要
-pytest==9.1.1
-httpx==0.28.1
