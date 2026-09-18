@@ -1,0 +1,16 @@
+# 本项目的运行环境以 Linux 服务器为准：工作区一律使用 LF，
+# 避免在 Windows 上 checkout 后 shell 脚本出现 CRLF 导致 bad interpreter。
+* text=auto eol=lf
+
+*.sh text eol=lf
+*.py text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.zip binary
+*.pdf binary

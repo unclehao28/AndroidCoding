@@ -1,0 +1,5 @@
+<!-- 示例代码：设备配置 -->
+<display>
+    <brightness default="128" max="255" />
+    <backlight>/sys/class/backlight/demo</backlight>
+</display>

@@ -1,0 +1,199 @@
+{
+  "format": "fixture-navigation-v1",
+  "coordinate_system": "zero-based UTF-16",
+  "note": "Expectations only. No LSP navigation has been executed.",
+  "cases": [
+    {
+      "id": "cpp-outer-before",
+      "method": "textDocument/definition",
+      "from": {
+        "path": "navigation-cpp/main.cpp",
+        "line": 5,
+        "character": 24,
+        "symbol": "level"
+      },
+      "expected": {
+        "path": "navigation-cpp/main.cpp",
+        "line": 3,
+        "character": 8,
+        "symbol": "level"
+      }
+    },
+    {
+      "id": "cpp-inner-shadow",
+      "method": "textDocument/definition",
+      "from": {
+        "path": "navigation-cpp/main.cpp",
+        "line": 8,
+        "character": 28,
+        "symbol": "level"
+      },
+      "expected": {
+        "path": "navigation-cpp/main.cpp",
+        "line": 7,
+        "character": 12,
+        "symbol": "level"
+      }
+    },
+    {
+      "id": "cpp-outer-after",
+      "method": "textDocument/definition",
+      "from": {
+        "path": "navigation-cpp/main.cpp",
+        "line": 10,
+        "character": 16,
+        "symbol": "level"
+      },
+      "expected": {
+        "path": "navigation-cpp/main.cpp",
+        "line": 3,
+        "character": 8,
+        "symbol": "level"
+      }
+    },
+    {
+      "id": "cpp-parameter",
+      "method": "textDocument/definition",
+      "from": {
+        "path": "navigation-cpp/state.cpp",
+        "line": 5,
+        "character": 15,
+        "symbol": "brightness"
+      },
+      "expected": {
+        "path": "navigation-cpp/state.cpp",
+        "line": 4,
+        "character": 37,
+        "symbol": "brightness"
+      }
+    },
+    {
+      "id": "cpp-member",
+      "method": "textDocument/definition",
+      "from": {
+        "path": "navigation-cpp/state.cpp",
+        "line": 6,
+        "character": 10,
+        "symbol": "brightness"
+      },
+      "expected": {
+        "path": "navigation-cpp/state.h",
+        "line": 6,
+        "character": 8,
+        "symbol": "brightness"
+      }
+    },
+    {
+      "id": "cpp-global",
+      "method": "textDocument/definition",
+      "from": {
+        "path": "navigation-cpp/state.cpp",
+        "line": 7,
+        "character": 4,
+        "symbol": "gBrightness"
+      },
+      "expected": {
+        "path": "navigation-cpp/state.cpp",
+        "line": 2,
+        "character": 4,
+        "symbol": "gBrightness"
+      }
+    },
+    {
+      "id": "cpp-constant",
+      "method": "textDocument/definition",
+      "from": {
+        "path": "navigation-cpp/main.cpp",
+        "line": 11,
+        "character": 19,
+        "symbol": "kDefaultBrightness"
+      },
+      "expected": {
+        "path": "navigation-cpp/state.h",
+        "line": 3,
+        "character": 21,
+        "symbol": "kDefaultBrightness"
+      }
+    },
+    {
+      "id": "java-parameter",
+      "method": "textDocument/definition",
+      "from": {
+        "path": "navigation-java/src/demo/ScopeDemo.java",
+        "line": 6,
+        "character": 21,
+        "symbol": "level"
+      },
+      "expected": {
+        "path": "navigation-java/src/demo/ScopeDemo.java",
+        "line": 5,
+        "character": 26,
+        "symbol": "level"
+      }
+    },
+    {
+      "id": "java-field",
+      "method": "textDocument/definition",
+      "from": {
+        "path": "navigation-java/src/demo/ScopeDemo.java",
+        "line": 7,
+        "character": 13,
+        "symbol": "level"
+      },
+      "expected": {
+        "path": "navigation-java/src/demo/ScopeDemo.java",
+        "line": 3,
+        "character": 16,
+        "symbol": "level"
+      }
+    },
+    {
+      "id": "java-field-read",
+      "method": "textDocument/definition",
+      "from": {
+        "path": "navigation-java/src/demo/ScopeDemo.java",
+        "line": 12,
+        "character": 15,
+        "symbol": "level"
+      },
+      "expected": {
+        "path": "navigation-java/src/demo/ScopeDemo.java",
+        "line": 3,
+        "character": 16,
+        "symbol": "level"
+      }
+    },
+    {
+      "id": "java-first-local",
+      "method": "textDocument/definition",
+      "from": {
+        "path": "navigation-java/src/demo/ScopeDemo.java",
+        "line": 19,
+        "character": 19,
+        "symbol": "value"
+      },
+      "expected": {
+        "path": "navigation-java/src/demo/ScopeDemo.java",
+        "line": 18,
+        "character": 16,
+        "symbol": "value"
+      }
+    },
+    {
+      "id": "java-second-local",
+      "method": "textDocument/definition",
+      "from": {
+        "path": "navigation-java/src/demo/ScopeDemo.java",
+        "line": 23,
+        "character": 19,
+        "symbol": "value"
+      },
+      "expected": {
+        "path": "navigation-java/src/demo/ScopeDemo.java",
+        "line": 22,
+        "character": 16,
+        "symbol": "value"
+      }
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+# 示例代码：服务启动配置
+service demo-display /vendor/bin/demo.display-service
+    class hal
+    user system
+    group graphics

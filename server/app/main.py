@@ -1,0 +1,395 @@
+"""安卓源码工作台后端（P1）。
+
+只做真实文件能力：健康状态、工作区、分层目录、文件/行段读取、受限全文检索、取消检索。
+不提供写入（P4）、不提供语义跳转（P2）——这些接口会显式返回未就绪状态。
+"""
+from __future__ import annotations
+
+import hashlib
+import os
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict
+
+from .config import API_VERSION, VERSION, AppConfig
+from .errors import (
+    ApiError,
+    invalid_request,
+    not_a_file,
+    not_found,
+    unknown_workspace,
+)
+from .pathtools import (
+    decode_source,
+    detect_eol,
+    detect_language,
+    ensure_readable_file,
+    is_within,
+    resolve_under_root,
+)
+from .search import SearchManager, SearchRequest, validate_query
+
+NOT_IMPLEMENTED_NAVIGATION = (
+    "P1 未接入语义语言服务（clangd / JDT LS 属于 P2）。"
+    "此接口只报告未就绪，不会用文本匹配或同名候选冒充跳转。"
+)
+
+
+def _camel(name: str) -> str:
+    head, *rest = name.split("_")
+    return head + "".join(word.capitalize() for word in rest)
+
+
+class CamelModel(BaseModel):
+    model_config = ConfigDict(alias_generator=_camel, populate_by_name=True, extra="forbid")
+
+
+class SearchBody(CamelModel):
+    query: str
+    workspace: str
+    scope: str = ""
+    regex: bool = False
+    case_sensitive: bool = False
+    whole_word: bool = False
+    include_glob: str | None = None
+    limit: int | None = None
+    request_id: str | None = None
+
+
+class CancelBody(CamelModel):
+    request_id: str
+
+
+class NavigationBody(CamelModel):
+    workspace: str
+    path: str
+    kind: str = "definition"
+    source_version: str | None = None
+    position: dict | None = None
+
+
+def _require_root(config: AppConfig, workspace: str):
+    root = config.root(workspace)
+    if root is None:
+        raise unknown_workspace(workspace)
+    if not root.path.is_dir():
+        raise not_found("工作区根目录当前不可用", workspace=workspace, path=str(root.path))
+    return root
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def create_app(config: AppConfig, search_manager: SearchManager | None = None) -> FastAPI:
+    manager = search_manager or SearchManager(config)
+    app = FastAPI(
+        title="安卓源码工作台后端",
+        version=VERSION,
+        description="P1：真实目录读取与受限检索。写入与语义导航尚未实现。",
+        docs_url="/api/docs",
+        openapi_url="/api/openapi.json",
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(config.server.cors_origins),
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.state.config = config
+    app.state.search_manager = manager
+
+    @app.exception_handler(ApiError)
+    async def api_error_handler(_request: Request, exc: ApiError) -> JSONResponse:
+        return JSONResponse(status_code=exc.status_code, content=exc.to_payload())
+
+    @app.get("/api/health")
+    async def health() -> dict[str, Any]:
+        return {
+            "status": "ok",
+            "mode": "real",
+            "version": VERSION,
+            "apiVersion": API_VERSION,
+            "time": _now_iso(),
+            "serverTimeMs": int(time.time() * 1000),
+            "search": manager.engine_info(),
+            "activeSearches": manager.active_request_ids,
+            "features": {"write": config.features.write, "navigation": config.features.navigation},
+            "capabilities": {
+                "write": False,
+                "navigation": False,
+                "index": False,
+                "note": "write 属于 P4，navigation/index 属于 P2/P3；当前均为未就绪",
+            },
+            "warnings": list(config.warnings),
+        }
+
+    @app.get("/api/workspaces")
+    async def workspaces() -> dict[str, Any]:
+        items = [root.to_public() for root in config.roots]
+        return {"workspaces": items, "count": len(items)}
+
+    @app.get("/api/config")
+    async def public_config() -> dict[str, Any]:
+        return config.to_public()
+
+    @app.get("/api/tree")
+    async def tree(workspace: str = Query(...), path: str = Query("")) -> dict[str, Any]:
+        root = _require_root(config, workspace)
+        target, rel = resolve_under_root(root.path, path)
+        if not target.is_dir():
+            raise not_a_file("目标是文件，不是目录", path=rel)
+        limit = config.limits.max_tree_entries
+        entries: list[dict[str, Any]] = []
+        truncated = False
+        try:
+            with os.scandir(target) as iterator:
+                raw_entries = sorted(iterator, key=lambda item: (not item.is_dir(), item.name.lower()))
+        except PermissionError:
+            raise ApiError(403, "permission_denied", f"服务器无权读取目录：{rel}", {"path": rel}) from None
+        for entry in raw_entries:
+            if len(entries) >= limit:
+                truncated = True
+                break
+            try:
+                stat = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            is_symlink = entry.is_symlink()
+            escaping = False
+            if is_symlink:
+                try:
+                    escaping = not is_within(Path(entry.path).resolve(), root.path)
+                except OSError:
+                    escaping = True
+            if entry.is_dir(follow_symlinks=not escaping):
+                kind = "dir"
+            elif entry.is_file(follow_symlinks=not escaping):
+                kind = "file"
+            else:
+                kind = "other"
+            child_rel = f"{rel}/{entry.name}" if rel else entry.name
+            entries.append(
+                {
+                    "name": entry.name,
+                    "path": child_rel,
+                    "type": kind,
+                    "size": None if kind == "dir" else stat.st_size,
+                    "symlink": is_symlink,
+                    "escaping": escaping,
+                    "accessible": not escaping,
+                }
+            )
+        return {
+            "workspaceId": root.id,
+            "workspaceName": root.name,
+            "path": rel,
+            "parent": rel.rsplit("/", 1)[0] if "/" in rel else ("" if rel else None),
+            "entries": entries,
+            "entryCount": len(entries),
+            "truncated": truncated,
+            "limit": limit,
+            "readonly": root.readonly,
+        }
+
+    @app.get("/api/file")
+    async def read_file(
+        workspace: str = Query(...),
+        path: str = Query(...),
+        startLine: int = Query(0, ge=0),
+        lineCount: int | None = Query(None, ge=1),
+    ) -> dict[str, Any]:
+        root = _require_root(config, workspace)
+        target, rel = resolve_under_root(root.path, path)
+        stat = ensure_readable_file(target, requested=rel)
+        base: dict[str, Any] = {
+            "workspaceId": root.id,
+            "path": rel,
+            "name": target.name,
+            "language": detect_language(target.name),
+            "size": stat.st_size,
+            "mtimeMs": int(stat.st_mtime * 1000),
+            "readonly": root.readonly,
+            "symlink": target.is_symlink(),
+        }
+        max_bytes = config.limits.max_file_bytes
+        if stat.st_size > max_bytes:
+            return {
+                **base,
+                "status": "too_large",
+                "message": f"文件 {stat.st_size} 字节，超过 maxFileBytes={max_bytes}；请调整配置或使用命令行工具处理",
+                "lines": [],
+                "startLine": 0,
+                "lineCount": 0,
+                "totalLines": None,
+                "hasMore": False,
+                "hash": None,
+            }
+        with open(target, "rb") as handle:
+            raw = handle.read(max_bytes + 1)
+        if len(raw) > max_bytes:
+            return {
+                **base,
+                "status": "too_large",
+                "message": f"文件在读取过程中超过 maxFileBytes={max_bytes}",
+                "lines": [],
+                "startLine": 0,
+                "lineCount": 0,
+                "totalLines": None,
+                "hasMore": False,
+                "hash": None,
+            }
+        digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+        decoded = decode_source(raw)
+        if not decoded.ok:
+            return {
+                **base,
+                "status": decoded.status,
+                "message": decoded.message,
+                "lines": [],
+                "startLine": 0,
+                "lineCount": 0,
+                "totalLines": None,
+                "hasMore": False,
+                "hash": digest,
+                "encoding": decoded.encoding,
+            }
+        total = len(decoded.lines)
+        max_lines = config.limits.max_line_count
+        requested_lines = lineCount if lineCount is not None else max_lines
+        clamped = requested_lines > max_lines
+        effective = min(requested_lines, max_lines)
+        if startLine >= total:
+            effective = 0
+        window = decoded.lines[startLine : startLine + effective] if effective else ()
+        end = startLine + len(window)
+        return {
+            **base,
+            "status": "ok",
+            "encoding": decoded.encoding,
+            "lossy": decoded.lossy,
+            "eol": detect_eol(raw),
+            "hash": digest,
+            "lines": list(window),
+            "startLine": startLine,
+            "lineCount": len(window),
+            "totalLines": total,
+            "hasMore": end < total,
+            "lineCountClamped": clamped,
+            "maxLineCount": max_lines,
+        }
+
+    @app.post("/api/search")
+    async def search(body: SearchBody) -> dict[str, Any]:
+        root = _require_root(config, body.workspace)
+        literal = not body.regex
+        query = validate_query(body.query, literal=literal, max_length=config.limits.max_regex_length)
+        if body.include_glob is not None and body.include_glob.strip().startswith("!"):
+            raise invalid_request("includeGlob 不能以 ! 开头，排除规则请放在配置的 excludeGlobs 中")
+        start_dir, subpath = resolve_under_root(root.path, body.scope or "")
+        if not start_dir.is_dir():
+            raise not_a_file("scope 必须是目录", path=subpath)
+        limit = min(body.limit or config.limits.max_search_results, config.limits.max_search_results)
+        request_id = body.request_id or f"req-{uuid.uuid4().hex[:16]}"
+        request = SearchRequest(
+            request_id=request_id,
+            root=root,
+            query=query,
+            start_dir=start_dir,
+            subpath=subpath,
+            literal=literal,
+            case_sensitive=body.case_sensitive,
+            whole_word=body.whole_word,
+            include_glob=body.include_glob or None,
+            limit=limit,
+            timeout_seconds=config.limits.search_timeout_seconds,
+            max_file_bytes=config.limits.max_search_file_bytes,
+            max_line_length=config.limits.max_line_length,
+            exclude_globs=config.search.exclude_globs,
+            respect_ignore_files=config.search.respect_ignore_files,
+            python_max_files=config.search.python_max_files,
+            rg_threads=config.limits.rg_threads,
+        )
+        started = time.perf_counter()
+        outcome = await manager.run(request)
+        payload = outcome.to_payload()
+        payload.update(
+            {
+                "requestId": request_id,
+                "query": query,
+                "workspaceId": root.id,
+                "scope": subpath,
+                "limit": limit,
+                "elapsedMs": round((time.perf_counter() - started) * 1000, 1),
+                "options": {
+                    "regex": body.regex,
+                    "caseSensitive": body.case_sensitive,
+                    "wholeWord": body.whole_word,
+                    "includeGlob": body.include_glob or None,
+                },
+                "columnUnit": "unicode-code-points",
+                "lineBase": 0,
+                "indexed": False,
+                "indexNote": "P1 未建立全库索引，检索为受限制的目录扫描（全库索引属于 P3）",
+            }
+        )
+        return payload
+
+    @app.post("/api/search/cancel")
+    async def cancel_search(body: CancelBody) -> dict[str, Any]:
+        cancelled = manager.cancel(body.request_id)
+        return {
+            "requestId": body.request_id,
+            "cancelled": cancelled,
+            "activeSearches": manager.active_request_ids,
+            "note": "" if cancelled else "该 requestId 没有正在运行的检索（可能已结束）",
+        }
+
+    @app.post("/api/navigation")
+    async def navigation(body: NavigationBody) -> dict[str, Any]:
+        root = _require_root(config, body.workspace)
+        resolved, rel = resolve_under_root(root.path, body.path)
+        if not resolved.exists():
+            raise not_found("文件不存在", path=rel)
+        return {
+            "status": "unavailable",
+            "kind": "semantic",
+            "workspaceId": root.id,
+            "sourceVersion": body.source_version,
+            "targets": [],
+            "reason": NOT_IMPLEMENTED_NAVIGATION,
+            "requestedKind": body.kind,
+            "requestedPosition": body.position,
+            "features": {"navigation": False, "phase": "P1"},
+            "fallback": {
+                "available": True,
+                "kind": "text",
+                "endpoint": "/api/search",
+                "note": "文本检索结果只表示字面匹配，不代表定义或引用",
+            },
+        }
+
+    @app.api_route("/api/{rest:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    async def api_unknown(rest: str) -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content={"error": {"code": "unknown_route", "message": f"未知接口：/api/{rest}"}},
+        )
+
+    app.mount("/", StaticFiles(directory=str(config.prototype_dir), html=True), name="prototype")
+    return app
+
+
+def create_app_from_env() -> FastAPI:
+    """供 `uvicorn --factory app.main:create_app_from_env` 使用（配置来自 ASW_CONFIG 或默认位置）。"""
+    from .config import load_config, resolve_config_path
+
+    return create_app(load_config(resolve_config_path()))

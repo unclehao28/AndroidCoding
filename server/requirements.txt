@@ -1,0 +1,14 @@
+# 安卓源码工作台后端依赖（P1）
+# 说明：版本为实际安装并通过测试的版本，见 HANDOFF_STATUS.md 的验证记录。
+# 安装：python -m pip install -r server/requirements.txt
+fastapi==0.141.1
+starlette==1.6.0
+pydantic==2.13.5
+uvicorn==0.53.0
+httptools==0.8.0
+watchfiles==1.2.0
+websockets==17.1
+python-dotenv==1.2.3
+# 仅测试需要
+pytest==9.1.1
+httpx==0.28.1

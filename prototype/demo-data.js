@@ -1,0 +1,141 @@
+/* 内置演示数据：仅在「示例数据」模式下使用。
+   这些内容是自编示例，不是 AOSP 或任何真实工程源码，也不代表任何后端能力。
+   真实模式（连接 P1 后端）不会读取本文件中的任何条目。 */
+window.ASW_DEMO = (() => {
+  const files = [
+    {id:'controller',path:'frameworks/base/services/core/java/demo/display/DisplayController.java',lang:'Java',lines:[
+      '// 示例代码：屏幕亮度控制',
+      'package demo.display;',
+      '',
+      'public final class DisplayController {',
+      '    private int lastBrightness = -1;',
+      '',
+      '    public void setBrightness(int level) {',
+      '        int safeLevel = Math.max(0, level);',
+      '        if (safeLevel == lastBrightness) {',
+      '            return;',
+      '        }',
+      '        nativeSetBrightness(safeLevel);',
+      '        lastBrightness = safeLevel;',
+      '    }',
+      '',
+      '    private static native void',
+      '        nativeSetBrightness(int level);',
+      '}'
+    ]},
+    {id:'jni',path:'frameworks/base/core/jni/display_bridge.cpp',lang:'C++',lines:[
+      '// 示例代码：JNI 静态注册关系',
+      '#include <jni.h>',
+      '#include "DisplayService.h"',
+      '',
+      'static void nativeSetBrightness(',
+      '    JNIEnv* env, jclass clazz, jint level) {',
+      '    DisplayService::instance()',
+      '        .setBrightness(level);',
+      '}',
+      '',
+      'static const JNINativeMethod METHODS[] = {',
+      '    {"nativeSetBrightness", "(I)V",',
+      '     reinterpret_cast<void*>(nativeSetBrightness)}',
+      '};'
+    ]},
+    {id:'native',path:'frameworks/native/services/display/DisplayService.cpp',lang:'C++',lines:[
+      '// 示例代码：Native 服务',
+      '#include "DisplayService.h"',
+      '',
+      'void DisplayService::setBrightness(int level) {',
+      '    if (brightnessHal == nullptr) {',
+      '        return;',
+      '    }',
+      '    brightnessHal->setBrightness(level);',
+      '}'
+    ]},
+    {id:'aidl',path:'hardware/interfaces/display/aidl/demo/display/IBrightness.aidl',lang:'AIDL',lines:[
+      '// 示例代码：跨进程接口',
+      'package demo.display;',
+      '',
+      'interface IBrightness {',
+      '    void setBrightness(int level);',
+      '    int getBrightness();',
+      '}'
+    ]},
+    {id:'hal',path:'vendor/demo/display/BrightnessHal.cpp',lang:'C++',lines:[
+      '// 示例代码：亮度接口实现',
+      '#include "BrightnessHal.h"',
+      '',
+      'Status BrightnessHal::setBrightness(int level) {',
+      '    const int clamped = std::clamp(level, 0, 255);',
+      '    writeBrightnessNode(clamped);',
+      '    return Status::ok();',
+      '}',
+      '',
+      'void writeBrightnessNode(int value) {',
+      '    writeNode("/sys/class/backlight/demo/brightness",',
+      '              value);',
+      '}'
+    ]},
+    {id:'kernel',path:'kernel/drivers/gpu/drm/demo/panel_backlight.c',lang:'C',lines:[
+      '// 示例代码：内核背光回调',
+      '#include <linux/backlight.h>',
+      '',
+      'static int panel_update_status(',
+      '    struct backlight_device *device) {',
+      '    int level = device->props.brightness;',
+      '    return panel_write_register(level);',
+      '}',
+      '',
+      'static const struct backlight_ops demo_ops = {',
+      '    .update_status = panel_update_status,',
+      '};'
+    ]},
+    {id:'app',path:'packages/apps/DisplayDemo/BrightnessPanel.java',lang:'Java',lines:[
+      '// 示例代码：应用层调用',
+      'package demo.display;',
+      '',
+      'public class BrightnessPanel {',
+      '    private DisplayController controller;',
+      '',
+      '    public void onSliderChanged(int value) {',
+      '        controller.setBrightness(value);',
+      '    }',
+      '}'
+    ]},
+    {id:'config',path:'device/demo/display/display_config.xml',lang:'XML',lines:[
+      '<!-- 示例代码：设备配置 -->',
+      '<display>',
+      '    <brightness default="128" max="255" />',
+      '    <backlight>/sys/class/backlight/demo</backlight>',
+      '</display>'
+    ]},
+    {id:'build',path:'vendor/demo/display/Android.bp',lang:'Soong',lines:[
+      '// 示例代码：模块构建配置',
+      'cc_binary {',
+      '    name: "demo.display-service",',
+      '    vendor: true,',
+      '    srcs: ["BrightnessHal.cpp"],',
+      '    shared_libs: ["libbinder_ndk", "liblog"],',
+      '}'
+    ]},
+    {id:'init',path:'system/core/init/display.rc',lang:'init',lines:[
+      '# 示例代码：服务启动配置',
+      'service demo-display /vendor/bin/demo.display-service',
+      '    class hal',
+      '    user system',
+      '    group graphics'
+    ]}
+  ];
+  const definitions = {
+    DisplayController:[['controller',4,'Java 类声明']],
+    setBrightness:[['controller',7,'Java 方法声明'],['native',4,'C++ 成员定义'],['aidl',5,'AIDL 接口声明'],['hal',4,'C++ 成员定义']],
+    nativeSetBrightness:[['controller',17,'Java native 声明'],['jni',5,'C++ 函数定义']],
+    writeBrightnessNode:[['hal',10,'C++ 函数定义']],
+    panel_update_status:[['kernel',4,'C 函数定义']],
+    BrightnessHal:[['hal',4,'成员定义中的类名']],
+    DisplayService:[['native',4,'成员定义中的类名']],
+    IBrightness:[['aidl',4,'AIDL 接口声明']],
+    getBrightness:[['aidl',6,'AIDL 方法声明']],
+    BrightnessPanel:[['app',4,'Java 类声明']],
+    onSliderChanged:[['app',7,'Java 方法声明']]
+  };
+  return {files, definitions, note:'演示数据，仅用于示例模式'};
+})();

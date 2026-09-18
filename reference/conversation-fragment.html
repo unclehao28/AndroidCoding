@@ -1,0 +1,330 @@
+<div id="android-workbench" aria-label="安卓源码工作台交互原型">
+  <style>
+    #android-workbench{--cw-bg:light-dark(#ffffff,#171c24);--cw-panel:light-dark(#f6f8fb,#1d232e);--cw-text:light-dark(#202b3c,#e5eaf2);--cw-muted:light-dark(#657185,#a5b1c2);--cw-border:light-dark(#e1e6ee,#343d4b);--cw-blue:light-dark(#245bc3,#88b2ff);--cw-select:light-dark(#eaf1ff,#243653);--cw-green:light-dark(#237548,#8ad4a1);--cw-add:light-dark(#edf8f0,#20392b);--cw-remove:light-dark(#fff0ef,#462a2b);--cw-orange:light-dark(#956012,#e6bb76);color-scheme:light dark;background:var(--cw-bg);color:var(--cw-text);border:1px solid var(--cw-border);border-radius:12px;overflow:clip;font:400 13px/1.6 'Segoe UI','Microsoft YaHei',sans-serif;width:100%;box-sizing:border-box}
+    #android-workbench *{box-sizing:border-box}
+    #android-workbench button,#android-workbench input,#android-workbench textarea{font:inherit;color:inherit}
+    #android-workbench button{border:0;background:none;text-align:left;min-height:32px;padding:5px 9px;border-radius:5px}
+    #android-workbench button:hover{background:var(--cw-select)}
+    #android-workbench button:disabled{opacity:.45;cursor:default}
+    #android-workbench .cw-top{padding:13px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-bottom:1px solid var(--cw-border)}
+    #android-workbench .cw-brand{display:flex;align-items:center;gap:9px;font-size:15px;font-weight:500}
+    #android-workbench .cw-logo{display:grid;place-items:center;width:28px;height:28px;background:var(--cw-select);color:var(--cw-blue);border-radius:7px}
+    #android-workbench .cw-spacer{flex:1}
+    #android-workbench .cw-tag{padding:2px 7px;border-radius:4px;font-size:11px;color:var(--cw-muted);background:var(--cw-panel);white-space:nowrap}
+    #android-workbench .cw-demo{color:var(--cw-orange);border:1px solid var(--cw-border);background:var(--cw-bg)}
+    #android-workbench .cw-searchbar{display:flex;align-items:center;gap:10px;padding:11px 16px;background:var(--cw-panel);border-bottom:1px solid var(--cw-border);flex-wrap:wrap}
+    #android-workbench .cw-inputwrap{display:flex;align-items:center;gap:9px;border:1px solid var(--cw-border);border-radius:7px;background:var(--cw-bg);padding:4px 10px;flex:1;min-width:160px}
+    #android-workbench .cw-inputwrap input{min-width:0;flex:1;background:transparent;border:0;outline-offset:3px;padding:4px 0}
+    #android-workbench .cw-shortcut{font:11px/1.4 monospace;color:var(--cw-muted);border:1px solid var(--cw-border);border-radius:3px;padding:2px 4px;white-space:nowrap}
+    #android-workbench .cw-scope{display:flex;align-items:center;gap:5px;color:var(--cw-blue)}
+    #android-workbench .cw-layout{display:grid;grid-template-columns:220px minmax(0,1fr) 228px;align-items:stretch}
+    #android-workbench .cw-sidebar{background:var(--cw-panel);border-right:1px solid var(--cw-border);min-width:0}
+    #android-workbench .cw-tabs{padding:7px 8px;display:flex;align-items:center;gap:4px;border-bottom:1px solid var(--cw-border);flex-wrap:wrap}
+    #android-workbench .cw-tabs button{font-size:12px;color:var(--cw-muted)}
+    #android-workbench button[aria-pressed=true]{background:var(--cw-select);color:var(--cw-blue)}
+    #android-workbench .cw-subtitle{padding:10px 12px 5px;font-size:11px;color:var(--cw-muted);display:flex;justify-content:space-between;gap:8px}
+    #android-workbench .cw-results{padding:3px 6px 9px}
+    #android-workbench .cw-result{width:100%;padding:10px;margin-bottom:4px;border-left:2px solid transparent;border-radius:0 5px 5px 0;display:block}
+    #android-workbench .cw-result.cw-current{background:var(--cw-select);border-left-color:var(--cw-blue)}
+    #android-workbench .cw-result-name{display:flex;gap:6px;align-items:center;font-weight:500;overflow-wrap:anywhere}
+    #android-workbench .cw-path{display:block;color:var(--cw-muted);font-size:11px;overflow-wrap:anywhere;margin-top:3px}
+    #android-workbench .cw-snippet{display:block;font:11px/1.6 Consolas,monospace;color:var(--cw-muted);overflow-wrap:anywhere;margin-top:5px}
+    #android-workbench mark{background:var(--cw-select);color:var(--cw-blue);padding:0 1px}
+    #android-workbench .cw-group{padding:8px 10px 2px;color:var(--cw-muted);font-size:11px;font-weight:500}
+    #android-workbench .cw-file{display:flex;align-items:center;gap:7px;width:100%;padding:6px 10px;overflow-wrap:anywhere}
+    #android-workbench .cw-file span{min-width:0;overflow-wrap:anywhere}
+    #android-workbench .cw-editor{min-width:0;background:var(--cw-bg)}
+    #android-workbench .cw-filebar{display:flex;align-items:center;padding:7px 10px;border-bottom:1px solid var(--cw-border);gap:5px;min-height:48px;flex-wrap:wrap}
+    #android-workbench .cw-filename{font-size:12px;font-weight:500;overflow-wrap:anywhere;flex:1;min-width:100px}
+    #android-workbench .cw-iconbutton{padding:4px 5px;display:inline-flex;align-items:center;justify-content:center;min-width:30px}
+    #android-workbench .cw-crumb{padding:10px 14px;color:var(--cw-muted);font-size:11px;overflow-wrap:anywhere;border-bottom:1px solid var(--cw-border)}
+    #android-workbench .cw-code{padding:14px 0;min-height:347px;font:12px/1.85 Consolas,'Cascadia Code',monospace}
+    #android-workbench .cw-line{display:flex;align-items:baseline;min-height:22px;padding-right:12px}
+    #android-workbench .cw-line.cw-highlight{background:var(--cw-select)}
+    #android-workbench .cw-lineno{color:var(--cw-muted);width:40px;flex:0 0 40px;text-align:right;padding-right:11px;user-select:none;font-size:11px}
+    #android-workbench .cw-linecode{min-width:0;flex:1;white-space:pre-wrap;overflow-wrap:anywhere}
+    #android-workbench .cw-symbol{font:inherit;color:var(--cw-blue);padding:0;min-height:0;border-radius:0;vertical-align:baseline;text-decoration:underline;text-decoration-color:var(--cw-border);text-underline-offset:3px}
+    #android-workbench .cw-keyword{color:light-dark(#9250a5,#c8a0e2)}
+    #android-workbench .cw-comment{color:var(--cw-muted)}
+    #android-workbench .cw-editarea{padding:12px}
+    #android-workbench textarea{width:100%;height:337px;resize:vertical;white-space:pre-wrap;background:var(--cw-bg);border:1px solid var(--cw-border);border-radius:5px;padding:10px;font:12px/1.85 Consolas,monospace;overflow-wrap:anywhere}
+    #android-workbench .cw-editactions{display:flex;justify-content:flex-end;gap:6px;padding-top:8px}
+    #android-workbench .cw-primary{background:var(--cw-blue);color:var(--cw-bg)}
+    #android-workbench .cw-primary:hover{background:var(--cw-blue);filter:brightness(.95)}
+    #android-workbench .cw-history{padding:9px 12px;border-top:1px solid var(--cw-border);display:flex;align-items:center;gap:3px;flex-wrap:wrap}
+    #android-workbench .cw-history-label{font-size:11px;color:var(--cw-muted);margin-right:5px}
+    #android-workbench .cw-history button{font-size:11px;color:var(--cw-blue);padding:3px 5px;min-height:27px;overflow-wrap:anywhere}
+    #android-workbench .cw-inspector{background:var(--cw-panel);border-left:1px solid var(--cw-border);min-width:0;padding-bottom:10px}
+    #android-workbench .cw-inspector-head{padding:12px;border-bottom:1px solid var(--cw-border);font-weight:500}
+    #android-workbench .cw-symbol-name{padding:12px 12px 4px;font:500 13px/1.6 Consolas,monospace;color:var(--cw-blue);overflow-wrap:anywhere}
+    #android-workbench .cw-relation-note{font-size:11px;color:var(--cw-muted);padding:0 12px 10px}
+    #android-workbench .cw-definition{padding:9px 10px;margin:0 7px 6px;border:1px solid var(--cw-border);border-radius:6px;background:var(--cw-bg);width:calc(100% - 14px);display:block}
+    #android-workbench .cw-definition span{display:block;font-size:11px;overflow-wrap:anywhere}
+    #android-workbench .cw-definition .cw-defname{font-size:12px;font-weight:500}
+    #android-workbench .cw-evidence{margin-top:7px;color:var(--cw-orange)}
+    #android-workbench .cw-refs{margin-top:8px;border-top:1px solid var(--cw-border);padding-top:3px}
+    #android-workbench .cw-ref{display:block;width:calc(100% - 12px);margin:0 6px 3px;font-size:11px;padding:6px;overflow-wrap:anywhere}
+    #android-workbench .cw-foot{border-top:1px solid var(--cw-border);padding:8px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:11px;color:var(--cw-muted);background:var(--cw-panel)}
+    #android-workbench .cw-status{color:var(--cw-green)}
+    #android-workbench .cw-empty{padding:20px 12px;color:var(--cw-muted);font-size:12px}
+    #android-workbench .cw-diffline{font:12px/1.85 Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;padding:3px 12px}
+    #android-workbench .cw-added{background:var(--cw-add);color:var(--cw-green)}
+    #android-workbench .cw-removed{background:var(--cw-remove);color:light-dark(#a04141,#f1aaaa)}
+    #android-workbench .cw-diffhead{padding:10px 12px;font-size:11px;color:var(--cw-muted)}
+    #android-workbench i,#android-workbench svg{width:15px;height:15px;flex-shrink:0;vertical-align:middle}
+    @media(max-width:920px){#android-workbench .cw-layout{grid-template-columns:205px minmax(0,1fr)}#android-workbench .cw-inspector{grid-column:1/-1;border-left:0;border-top:1px solid var(--cw-border);display:grid;grid-template-columns:1fr 1fr;align-items:start}#android-workbench .cw-inspector-head{grid-column:1/-1}#android-workbench .cw-refs{margin-top:0;border-top:0}}
+    @media(max-width:560px){#android-workbench .cw-layout{grid-template-columns:minmax(0,1fr)}#android-workbench .cw-sidebar{border-right:0;border-bottom:1px solid var(--cw-border)}#android-workbench .cw-results{display:grid;grid-template-columns:1fr 1fr}#android-workbench .cw-result{padding:8px}#android-workbench .cw-snippet{display:none}#android-workbench .cw-inspector{grid-template-columns:1fr}#android-workbench .cw-shortcut{display:none}#android-workbench .cw-top{padding:10px}#android-workbench .cw-searchbar{padding:10px}#android-workbench .cw-brand{font-size:14px}#android-workbench .cw-code{font-size:12px}#android-workbench input{font-size:16px}#android-workbench .cw-tag{font-size:11px}}
+    @media(pointer:coarse){#android-workbench button{min-height:44px}#android-workbench .cw-symbol{min-height:32px}#android-workbench input{font-size:16px}}
+  </style>
+  <div class="cw-top">
+    <div class="cw-brand"><span class="cw-logo"><i data-lucide="blocks" aria-hidden="true"></i></span>安卓源码工作台</div>
+    <span class="cw-tag cw-demo">交互原型 · 示例代码</span>
+    <span class="cw-spacer"></span>
+    <span class="cw-tag">演示工作区 / userdebug</span>
+  </div>
+  <div class="cw-searchbar">
+    <div class="cw-scope"><i data-lucide="layers" aria-hidden="true"></i><span>全部源码</span></div>
+    <label class="cw-inputwrap"><i data-lucide="search" aria-hidden="true"></i><input id="cw-search" type="search" aria-label="搜索全部示例源码" placeholder="搜索文件、符号或代码…" value="setBrightness"><span class="cw-shortcut">Ctrl K</span></label>
+  </div>
+  <div class="cw-layout">
+    <aside class="cw-sidebar" aria-label="源码导航">
+      <div class="cw-tabs"><button type="button" class="cursor-interaction" data-nav="search" aria-pressed="true">搜索</button><button type="button" class="cursor-interaction" data-nav="files" aria-pressed="false">文件</button><button type="button" class="cursor-interaction" data-nav="changes" aria-pressed="false">修改 <span id="cw-change-count">0</span></button></div>
+      <div class="cw-subtitle"><span id="cw-list-title">全库搜索</span><span id="cw-count"></span></div>
+      <div id="cw-list" class="cw-results"></div>
+    </aside>
+    <main class="cw-editor" aria-label="代码阅读与编辑">
+      <div class="cw-filebar">
+        <button type="button" class="cw-iconbutton cursor-interaction" id="cw-back" aria-label="返回上一个阅读位置"><i data-lucide="arrow-left" aria-hidden="true"></i></button>
+        <span class="cw-filename" id="cw-filename"></span>
+        <button type="button" class="cursor-interaction" id="cw-diff" aria-pressed="false">对比</button>
+        <button type="button" class="cursor-interaction" id="cw-edit">编辑</button>
+      </div>
+      <div class="cw-crumb" id="cw-path"></div>
+      <div id="cw-view"></div>
+      <div class="cw-history"><span class="cw-history-label">阅读轨迹</span><span id="cw-history"></span></div>
+    </main>
+    <aside class="cw-inspector" aria-label="定义候选和符号出现位置">
+      <div class="cw-inspector-head">定义与关联</div>
+      <div><div class="cw-symbol-name" id="cw-symbol-name"></div><div class="cw-relation-note" id="cw-relation-note"></div><div id="cw-definitions"></div></div>
+      <div class="cw-refs"><div class="cw-subtitle"><span>符号出现位置</span><span id="cw-refs-count"></span></div><div id="cw-refs"></div></div>
+    </aside>
+  </div>
+  <div class="cw-foot"><span id="cw-status" class="cw-status" aria-live="polite">示例数据已加载</span><span class="cw-spacer"></span><span>10 个示例文件 · 未连接服务器</span></div>
+</div>
+<script>
+(()=>{
+  const root=document.getElementById('android-workbench');
+  const $=id=>root.querySelector('#'+id);
+  const files=[
+    {id:'controller',path:'frameworks/base/services/core/java/demo/display/DisplayController.java',lang:'Java',lines:[
+      '// 示例代码：屏幕亮度控制',
+      'package demo.display;',
+      '',
+      'public final class DisplayController {',
+      '    private int lastBrightness = -1;',
+      '',
+      '    public void setBrightness(int level) {',
+      '        int safeLevel = Math.max(0, level);',
+      '        if (safeLevel == lastBrightness) {',
+      '            return;',
+      '        }',
+      '        nativeSetBrightness(safeLevel);',
+      '        lastBrightness = safeLevel;',
+      '    }',
+      '',
+      '    private static native void',
+      '        nativeSetBrightness(int level);',
+      '}'
+    ]},
+    {id:'jni',path:'frameworks/base/core/jni/display_bridge.cpp',lang:'C++',lines:[
+      '// 示例代码：JNI 静态注册关系',
+      '#include <jni.h>',
+      '#include "DisplayService.h"',
+      '',
+      'static void nativeSetBrightness(',
+      '    JNIEnv* env, jclass clazz, jint level) {',
+      '    DisplayService::instance()',
+      '        .setBrightness(level);',
+      '}',
+      '',
+      'static const JNINativeMethod METHODS[] = {',
+      '    {"nativeSetBrightness", "(I)V",',
+      '     reinterpret_cast<void*>(nativeSetBrightness)}',
+      '};'
+    ]},
+    {id:'native',path:'frameworks/native/services/display/DisplayService.cpp',lang:'C++',lines:[
+      '// 示例代码：Native 服务',
+      '#include "DisplayService.h"',
+      '',
+      'void DisplayService::setBrightness(int level) {',
+      '    if (brightnessHal == nullptr) {',
+      '        return;',
+      '    }',
+      '    brightnessHal->setBrightness(level);',
+      '}'
+    ]},
+    {id:'aidl',path:'hardware/interfaces/display/aidl/demo/display/IBrightness.aidl',lang:'AIDL',lines:[
+      '// 示例代码：跨进程接口',
+      'package demo.display;',
+      '',
+      'interface IBrightness {',
+      '    void setBrightness(int level);',
+      '    int getBrightness();',
+      '}'
+    ]},
+    {id:'hal',path:'vendor/demo/display/BrightnessHal.cpp',lang:'C++',lines:[
+      '// 示例代码：亮度接口实现',
+      '#include "BrightnessHal.h"',
+      '',
+      'Status BrightnessHal::setBrightness(int level) {',
+      '    const int clamped = std::clamp(level, 0, 255);',
+      '    writeBrightnessNode(clamped);',
+      '    return Status::ok();',
+      '}',
+      '',
+      'void writeBrightnessNode(int value) {',
+      '    writeNode("/sys/class/backlight/demo/brightness",',
+      '              value);',
+      '}'
+    ]},
+    {id:'kernel',path:'kernel/drivers/gpu/drm/demo/panel_backlight.c',lang:'C',lines:[
+      '// 示例代码：内核背光回调',
+      '#include <linux/backlight.h>',
+      '',
+      'static int panel_update_status(',
+      '    struct backlight_device *device) {',
+      '    int level = device->props.brightness;',
+      '    return panel_write_register(level);',
+      '}',
+      '',
+      'static const struct backlight_ops demo_ops = {',
+      '    .update_status = panel_update_status,',
+      '};'
+    ]},
+    {id:'app',path:'packages/apps/DisplayDemo/BrightnessPanel.java',lang:'Java',lines:[
+      '// 示例代码：应用层调用',
+      'package demo.display;',
+      '',
+      'public class BrightnessPanel {',
+      '    private DisplayController controller;',
+      '',
+      '    public void onSliderChanged(int value) {',
+      '        controller.setBrightness(value);',
+      '    }',
+      '}'
+    ]},
+    {id:'config',path:'device/demo/display/display_config.xml',lang:'XML',lines:[
+      '<!-- 示例代码：设备配置 -->',
+      '<display>',
+      '    <brightness default="128" max="255" />',
+      '    <backlight>/sys/class/backlight/demo</backlight>',
+      '</display>'
+    ]},
+    {id:'build',path:'vendor/demo/display/Android.bp',lang:'Soong',lines:[
+      '// 示例代码：模块构建配置',
+      'cc_binary {',
+      '    name: "demo.display-service",',
+      '    vendor: true,',
+      '    srcs: ["BrightnessHal.cpp"],',
+      '    shared_libs: ["libbinder_ndk", "liblog"],',
+      '}'
+    ]},
+    {id:'init',path:'system/core/init/display.rc',lang:'init',lines:[
+      '# 示例代码：服务启动配置',
+      'service demo-display /vendor/bin/demo.display-service',
+      '    class hal',
+      '    user system',
+      '    group graphics'
+    ]}
+  ];
+  const byId=Object.fromEntries(files.map(f=>[f.id,f]));
+  const definitions={
+    DisplayController:[['controller',4,'Java 类声明']],
+    setBrightness:[['controller',7,'Java 方法声明'],['native',4,'C++ 成员定义'],['aidl',5,'AIDL 接口声明'],['hal',4,'C++ 成员定义']],
+    nativeSetBrightness:[['controller',17,'Java native 声明'],['jni',5,'C++ 函数定义']],
+    writeBrightnessNode:[['hal',10,'C++ 函数定义']],
+    panel_update_status:[['kernel',4,'C 函数定义']],
+    BrightnessHal:[['hal',4,'成员定义中的类名']],
+    DisplayService:[['native',4,'成员定义中的类名']],
+    IBrightness:[['aidl',4,'AIDL 接口声明']],
+    getBrightness:[['aidl',6,'AIDL 方法声明']],
+    BrightnessPanel:[['app',4,'Java 类声明']],
+    onSliderChanged:[['app',7,'Java 方法声明']]
+  };
+  const state={file:'controller',line:7,symbol:'setBrightness',mode:'search',q:'setBrightness',expanded:false,history:[],trail:[{file:'controller',line:7}],edits:{},editing:false,diff:false};
+  const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const name=f=>f.path.split('/').pop();
+  const lines=f=>Object.hasOwn(state.edits,f.id)?state.edits[f.id].split('\n'):f.lines;
+  function highlight(s,q){if(!q)return esc(s);const at=s.toLowerCase().indexOf(q.toLowerCase());return at<0?esc(s):esc(s.slice(0,at))+'<mark>'+esc(s.slice(at,at+q.length))+'</mark>'+esc(s.slice(at+q.length));}
+  function positions(symbol){const re=new RegExp('\\b'+symbol+'\\b');return files.flatMap(f=>lines(f).flatMap((s,i)=>re.test(s)?[{file:f.id,line:i+1,text:s}]:[]));}
+  function icons(){if(typeof lucide!=='undefined')lucide.createIcons({attrs:{width:15,height:15}});}
+  function status(s){$('cw-status').textContent=s;}
+  function renderList(){
+    root.querySelectorAll('[data-nav]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.nav===state.mode)));
+    const changed=Object.keys(state.edits);$('cw-change-count').textContent=changed.length;
+    let html='';
+    if(state.mode==='search'){
+      $('cw-list-title').textContent='全部源码中的匹配';
+      const query=state.q.trim().toLowerCase();
+      const matches=files.flatMap(f=>{const found=lines(f).flatMap((s,i)=>query&&s.toLowerCase().includes(query)?[{file:f,line:i+1,text:s}]:[]);if(found.length)return found;if(query&&f.path.toLowerCase().includes(query))return [{file:f,line:1,text:lines(f)[0]}];return [];});
+      $('cw-count').textContent=matches.length+' 处';
+      const shown=state.expanded?matches:matches.slice(0,6);
+      html=shown.map(m=>'<button type="button" class="cw-result cursor-interaction '+(m.file.id===state.file&&m.line===state.line?'cw-current':'')+'" data-open="'+m.file.id+'" data-line="'+m.line+'"><span class="cw-result-name">'+esc(name(m.file))+'</span><span class="cw-path">'+esc(m.file.path.split('/').slice(0,-1).join('/'))+'</span><span class="cw-snippet">'+m.line+' · '+highlight(m.text.trim(),state.q.trim())+'</span></button>').join('');
+      if(!matches.length)html='<div class="cw-empty">'+(query?'没有匹配结果':'输入文件名、符号或代码')+'</div>';
+      if(matches.length>6)html+='<button type="button" id="cw-more" class="cursor-interaction">'+(state.expanded?'收起结果':'展开其余 '+(matches.length-6)+' 处')+'</button>';
+    }else{
+      const list=state.mode==='changes'?files.filter(f=>changed.includes(f.id)):files;
+      $('cw-list-title').textContent=state.mode==='changes'?'本次演示中的修改':'完整示例源码树';$('cw-count').textContent=list.length+' 文件';
+      let lastGroup='';for(const f of list){const group=f.path.split('/')[0];if(group!==lastGroup){html+='<div class="cw-group">'+esc(group)+'</div>';lastGroup=group;}html+='<button type="button" class="cw-file cursor-interaction" data-open="'+f.id+'" data-line="1" aria-pressed="'+(f.id===state.file)+'"><i data-lucide="file-code-2" aria-hidden="true"></i><span>'+esc(name(f))+(changed.includes(f.id)?' · M':'')+'</span></button>';}
+      if(!list.length)html='<div class="cw-empty">暂无修改</div>';
+    }
+    $('cw-list').innerHTML=html;
+  }
+  function colorCode(s){
+    if(s.trim().startsWith('//')||s.trim().startsWith('# 示例')||s.trim().startsWith('<!--'))return '<span class="cw-comment">'+esc(s)+'</span>';
+    const parts=s.split(/([A-Za-z_][A-Za-z_0-9]*)/g);
+    return parts.map(t=>definitions[t]?'<button type="button" class="cw-symbol cursor-interaction" data-symbol="'+t+'">'+esc(t)+'</button>':/^(public|private|static|final|class|interface|void|int|return|if|const|package|struct|true|nullptr)$/.test(t)?'<span class="cw-keyword">'+t+'</span>':esc(t)).join('');
+  }
+  function renderEditor(){
+    const f=byId[state.file];$('cw-filename').textContent=name(f)+(Object.hasOwn(state.edits,f.id)?' · M':'');$('cw-path').textContent=f.path+' · '+f.lang;
+    $('cw-back').disabled=!state.history.length||state.editing;$('cw-edit').disabled=state.editing;$('cw-diff').disabled=state.editing;$('cw-diff').setAttribute('aria-pressed',String(state.diff));
+    if(state.editing){
+      $('cw-view').innerHTML='<div class="cw-editarea"><textarea id="cw-buffer" aria-label="编辑示例代码" spellcheck="false"></textarea><div class="cw-editactions"><button type="button" id="cw-cancel" class="cursor-interaction">取消</button><button type="button" id="cw-save" class="cw-primary cursor-interaction">保存到演示</button></div></div>';$('cw-buffer').value=lines(f).join('\n');
+    }else if(state.diff){
+      const modified=lines(f),old=f.lines;
+      if(!Object.hasOwn(state.edits,f.id)){$('cw-view').innerHTML='<div class="cw-code"><div class="cw-empty">当前文件与示例基线一致。编辑后可在此查看差异。</div></div>';}
+      else{let out='<div class="cw-diffhead">示例基线 → 本次修改</div>';for(let i=0;i<Math.max(old.length,modified.length);i++){if(old[i]===modified[i])out+='<div class="cw-diffline">  '+esc(old[i]??'')+'</div>';else{if(i<old.length)out+='<div class="cw-diffline cw-removed">− '+esc(old[i])+'</div>';if(i<modified.length)out+='<div class="cw-diffline cw-added">+ '+esc(modified[i])+'</div>';}}$('cw-view').innerHTML='<div class="cw-code">'+out+'</div><div class="cw-editactions"><button type="button" id="cw-revert" class="cursor-interaction">恢复此文件的示例基线</button></div>';}
+    }else{$('cw-view').innerHTML='<div class="cw-code">'+lines(f).map((s,i)=>'<div class="cw-line '+(i+1===state.line?'cw-highlight':'')+'"><span class="cw-lineno">'+(i+1)+'</span><span class="cw-linecode">'+colorCode(s)+'</span></div>').join('')+'</div>';}
+    $('cw-history').innerHTML=state.trail.slice(-4).map((p,i)=>'<button type="button" class="cursor-interaction" data-open="'+p.file+'" data-line="'+p.line+'">'+(i?'› ':'')+esc(name(byId[p.file]))+'</button>').join('');
+  }
+  function renderInspector(){
+    const sym=state.symbol;$('cw-symbol-name').textContent=sym;
+    const defs=definitions[sym]||[];
+    $('cw-relation-note').textContent='示例候选 · '+defs.length+' 个位置'+(sym==='nativeSetBrightness'?' · 注册表提供关联线索':'');
+    $('cw-definitions').innerHTML=defs.map(([id,line,why])=>{const changed=Object.hasOwn(state.edits,id);return '<button type="button" class="cw-definition cursor-interaction" data-open="'+id+'" data-line="'+line+'"><span class="cw-defname">'+esc(name(byId[id]))+'</span><span class="cw-path">'+esc(byId[id].path.split('/').slice(0,-1).join('/'))+'</span><span class="cw-evidence">'+esc(changed?'文件已修改 · 原位置需核对':why)+' · L'+line+' ↗</span></button>';}).join('');
+    const refs=positions(sym);$('cw-refs-count').textContent=refs.length;$('cw-refs').innerHTML=refs.slice(0,6).map(p=>'<button type="button" class="cw-ref cursor-interaction" data-open="'+p.file+'" data-line="'+p.line+'">'+esc(name(byId[p.file]))+' : '+p.line+'</button>').join('')+(refs.length>6?'<button type="button" class="cw-ref cursor-interaction" id="cw-all-refs">在全库搜索中查看全部</button>':'');
+  }
+  function render(){renderList();renderEditor();renderInspector();icons();}
+  function open(id,line){if(state.editing){status('请先保存到演示或取消编辑');return;}if(!byId[id])return;state.history.push({file:state.file,line:state.line,symbol:state.symbol});state.file=id;state.line=Math.min(Number(line)||1,lines(byId[id]).length);state.diff=false;state.trail.push({file:id,line:state.line});render();status('阅读位置：'+name(byId[id])+' : '+state.line);}
+  $('cw-search').addEventListener('input',e=>{state.q=e.target.value;state.mode='search';state.expanded=false;renderList();icons();});
+  root.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();$('cw-search').focus();$('cw-search').select();}if(e.key==='Escape'&&state.editing){state.editing=false;renderEditor();icons();status('已取消编辑');}});
+  root.addEventListener('click',e=>{
+    const b=e.target.closest('button');if(!b||b.disabled)return;
+    if(b.dataset.nav){state.mode=b.dataset.nav;renderList();icons();return;}
+    if(b.dataset.open){open(b.dataset.open,b.dataset.line);return;}
+    if(b.dataset.symbol){state.symbol=b.dataset.symbol;renderInspector();status('显示 '+state.symbol+' 的示例候选和文本出现位置');return;}
+    switch(b.id){
+      case 'cw-more':state.expanded=!state.expanded;renderList();break;
+      case 'cw-back':{const prev=state.history.pop();if(prev){Object.assign(state,prev);state.diff=false;state.trail.push({file:prev.file,line:prev.line});render();status('已返回 '+name(byId[prev.file]));}break;}
+      case 'cw-edit':state.editing=true;state.diff=false;renderEditor();$('cw-buffer').focus();status('正在编辑示例代码；不会写入远程服务器');break;
+      case 'cw-cancel':state.editing=false;renderEditor();status('已取消编辑');break;
+      case 'cw-save':{const value=$('cw-buffer').value;const original=byId[state.file].lines.join('\n');if(value===original)delete state.edits[state.file];else state.edits[state.file]=value;state.editing=false;state.diff=true;render();status('已保存到本次演示；搜索已包含修改内容');break;}
+      case 'cw-diff':state.diff=!state.diff;renderEditor();break;
+      case 'cw-revert':delete state.edits[state.file];state.diff=false;render();status('此文件已恢复到示例基线');break;
+      case 'cw-all-refs':state.q=state.symbol;$('cw-search').value=state.symbol;state.mode='search';state.expanded=true;renderList();break;
+    }
+    icons();
+  });
+  render();
+})();
+</script>

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>安卓源码工作台</title>
+<link rel="stylesheet" href="styles.css">
+<script defer src="demo-data.js"></script>
+<script defer src="api.js"></script>
+<script defer src="app.js"></script>
+</head>
+<body>
+<div id="android-workbench" aria-label="安卓源码工作台">
+  
+  <div class="cw-top">
+    <div class="cw-brand"><span class="cw-logo"><span class="cw-icontext" aria-hidden="true">▦</span></span>安卓源码工作台</div>
+    <span class="cw-tag cw-demo" id="cw-mode-tag">示例数据 · 内置演示</span>
+    <span class="cw-spacer"></span>
+    <div class="cw-modepick" role="group" aria-label="数据来源">
+      <button type="button" class="cursor-interaction" id="cw-use-demo" aria-pressed="true">示例数据</button>
+      <button type="button" class="cursor-interaction" id="cw-use-real" aria-pressed="false">真实服务器</button>
+    </div>
+    <label class="cw-minifield" id="cw-serverwrap" hidden><span>地址</span><input type="text" id="cw-serverurl" value="http://127.0.0.1:8787" aria-label="后端地址" spellcheck="false"><button type="button" class="cursor-interaction" id="cw-connect">连接</button></label>
+    <label class="cw-minifield" id="cw-workwrap" hidden><span>工作区</span><select id="cw-workspace" aria-label="源码工作区"></select></label>
+  </div>
+  <div class="cw-searchbar">
+    <label class="cw-scope"><span class="cw-icontext" aria-hidden="true">▤</span><select id="cw-scope" aria-label="搜索范围"></select></label>
+    <label class="cw-inputwrap"><span class="cw-icontext" aria-hidden="true">⌕</span><input id="cw-search" type="search" aria-label="搜索全部源码" placeholder="搜索文件、符号或代码…" value="setBrightness"><span class="cw-shortcut">Ctrl K</span></label>
+    <div class="cw-opts" id="cw-opts">
+      <label><input type="checkbox" id="cw-opt-regex"> 正则</label>
+      <label><input type="checkbox" id="cw-opt-case"> 区分大小写</label>
+      <label><input type="checkbox" id="cw-opt-word"> 全字</label>
+    </div>
+    <button type="button" class="cw-primary cursor-interaction" id="cw-search-go">搜索</button>
+    <button type="button" class="cursor-interaction" id="cw-search-cancel" hidden>取消</button>
+  </div>
+  <div class="cw-banner" id="cw-banner" hidden></div>
+  <div class="cw-layout">
+    <aside class="cw-sidebar" aria-label="源码导航">
+      <div class="cw-tabs"><button type="button" class="cursor-interaction" data-nav="search" aria-pressed="true">搜索</button><button type="button" class="cursor-interaction" data-nav="files" aria-pressed="false">文件</button><button type="button" class="cursor-interaction" data-nav="changes" aria-pressed="false">修改 <span id="cw-change-count">0</span></button></div>
+      <div class="cw-subtitle"><span id="cw-list-title">全库搜索</span><span id="cw-count"></span></div>
+      <div id="cw-list" class="cw-results"></div>
+    </aside>
+    <main class="cw-editor" aria-label="代码阅读与编辑">
+      <div class="cw-filebar">
+        <button type="button" class="cw-iconbutton cursor-interaction" id="cw-back" aria-label="返回上一个阅读位置"><span class="cw-icontext" aria-hidden="true">←</span></button>
+        <span class="cw-filename" id="cw-filename"></span>
+        <button type="button" class="cursor-interaction" id="cw-diff" aria-pressed="false">对比</button>
+        <button type="button" class="cursor-interaction" id="cw-edit">编辑</button>
+      </div>
+      <div class="cw-crumb" id="cw-path"></div>
+      <div id="cw-view"></div>
+      <div class="cw-history"><span class="cw-history-label">阅读轨迹</span><span id="cw-history"></span></div>
+    </main>
+    <aside class="cw-inspector" aria-label="定义候选和符号出现位置">
+      <div class="cw-inspector-head">定义与关联</div>
+      <div><div class="cw-symbol-name" id="cw-symbol-name"></div><div class="cw-relation-note" id="cw-relation-note"></div><div id="cw-definitions"></div></div>
+      <div class="cw-refs"><div class="cw-subtitle"><span>符号出现位置</span><span id="cw-refs-count"></span></div><div id="cw-refs"></div></div>
+    </aside>
+  </div>
+  <div class="cw-foot"><span id="cw-status" class="cw-status" aria-live="polite">示例数据已加载</span><span class="cw-spacer"></span><span id="cw-footright">示例数据 · 后端未连接</span></div>
+</div>
+</body>
+</html>

@@ -1,0 +1,7 @@
+// 示例代码：模块构建配置
+cc_binary {
+    name: "demo.display-service",
+    vendor: true,
+    srcs: ["BrightnessHal.cpp"],
+    shared_libs: ["libbinder_ndk", "liblog"],
+}

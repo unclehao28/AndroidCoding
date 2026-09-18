@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# 本地配置：可能含服务器真实路径，不随包分发
+server/config.json
+
+# 临时日志
+*.log

@@ -1,0 +1,113 @@
+
+    #android-workbench{--cw-bg:light-dark(#ffffff,#171c24);--cw-panel:light-dark(#f6f8fb,#1d232e);--cw-text:light-dark(#202b3c,#e5eaf2);--cw-muted:light-dark(#657185,#a5b1c2);--cw-border:light-dark(#e1e6ee,#343d4b);--cw-blue:light-dark(#245bc3,#88b2ff);--cw-select:light-dark(#eaf1ff,#243653);--cw-green:light-dark(#237548,#8ad4a1);--cw-add:light-dark(#edf8f0,#20392b);--cw-remove:light-dark(#fff0ef,#462a2b);--cw-orange:light-dark(#956012,#e6bb76);color-scheme:light dark;background:var(--cw-bg);color:var(--cw-text);border:1px solid var(--cw-border);border-radius:12px;overflow:clip;font:400 13px/1.6 'Segoe UI','Microsoft YaHei',sans-serif;width:100%;box-sizing:border-box}
+    #android-workbench *{box-sizing:border-box}
+    #android-workbench button,#android-workbench input,#android-workbench textarea{font:inherit;color:inherit}
+    #android-workbench button{border:0;background:none;text-align:left;min-height:32px;padding:5px 9px;border-radius:5px}
+    #android-workbench button:hover{background:var(--cw-select)}
+    #android-workbench button:disabled{opacity:.45;cursor:default}
+    #android-workbench .cw-top{padding:13px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-bottom:1px solid var(--cw-border)}
+    #android-workbench .cw-brand{display:flex;align-items:center;gap:9px;font-size:15px;font-weight:500}
+    #android-workbench .cw-logo{display:grid;place-items:center;width:28px;height:28px;background:var(--cw-select);color:var(--cw-blue);border-radius:7px}
+    #android-workbench .cw-spacer{flex:1}
+    #android-workbench .cw-tag{padding:2px 7px;border-radius:4px;font-size:11px;color:var(--cw-muted);background:var(--cw-panel);white-space:nowrap}
+    #android-workbench .cw-demo{color:var(--cw-orange);border:1px solid var(--cw-border);background:var(--cw-bg)}
+    #android-workbench .cw-searchbar{display:flex;align-items:center;gap:10px;padding:11px 16px;background:var(--cw-panel);border-bottom:1px solid var(--cw-border);flex-wrap:wrap}
+    #android-workbench .cw-inputwrap{display:flex;align-items:center;gap:9px;border:1px solid var(--cw-border);border-radius:7px;background:var(--cw-bg);padding:4px 10px;flex:1;min-width:160px}
+    #android-workbench .cw-inputwrap input{min-width:0;flex:1;background:transparent;border:0;outline-offset:3px;padding:4px 0}
+    #android-workbench .cw-shortcut{font:11px/1.4 monospace;color:var(--cw-muted);border:1px solid var(--cw-border);border-radius:3px;padding:2px 4px;white-space:nowrap}
+    #android-workbench .cw-scope{display:flex;align-items:center;gap:5px;color:var(--cw-blue)}
+    #android-workbench .cw-layout{display:grid;grid-template-columns:220px minmax(0,1fr) 228px;align-items:stretch}
+    #android-workbench .cw-sidebar{background:var(--cw-panel);border-right:1px solid var(--cw-border);min-width:0}
+    #android-workbench .cw-tabs{padding:7px 8px;display:flex;align-items:center;gap:4px;border-bottom:1px solid var(--cw-border);flex-wrap:wrap}
+    #android-workbench .cw-tabs button{font-size:12px;color:var(--cw-muted)}
+    #android-workbench button[aria-pressed=true]{background:var(--cw-select);color:var(--cw-blue)}
+    #android-workbench .cw-subtitle{padding:10px 12px 5px;font-size:11px;color:var(--cw-muted);display:flex;justify-content:space-between;gap:8px}
+    #android-workbench .cw-results{padding:3px 6px 9px}
+    #android-workbench .cw-result{width:100%;padding:10px;margin-bottom:4px;border-left:2px solid transparent;border-radius:0 5px 5px 0;display:block}
+    #android-workbench .cw-result.cw-current{background:var(--cw-select);border-left-color:var(--cw-blue)}
+    #android-workbench .cw-result-name{display:flex;gap:6px;align-items:center;font-weight:500;overflow-wrap:anywhere}
+    #android-workbench .cw-path{display:block;color:var(--cw-muted);font-size:11px;overflow-wrap:anywhere;margin-top:3px}
+    #android-workbench .cw-snippet{display:block;font:11px/1.6 Consolas,monospace;color:var(--cw-muted);overflow-wrap:anywhere;margin-top:5px}
+    #android-workbench mark{background:var(--cw-select);color:var(--cw-blue);padding:0 1px}
+    #android-workbench .cw-group{padding:8px 10px 2px;color:var(--cw-muted);font-size:11px;font-weight:500}
+    #android-workbench .cw-file{display:flex;align-items:center;gap:7px;width:100%;padding:6px 10px;overflow-wrap:anywhere}
+    #android-workbench .cw-file span{min-width:0;overflow-wrap:anywhere}
+    #android-workbench .cw-editor{min-width:0;background:var(--cw-bg)}
+    #android-workbench .cw-filebar{display:flex;align-items:center;padding:7px 10px;border-bottom:1px solid var(--cw-border);gap:5px;min-height:48px;flex-wrap:wrap}
+    #android-workbench .cw-filename{font-size:12px;font-weight:500;overflow-wrap:anywhere;flex:1;min-width:100px}
+    #android-workbench .cw-iconbutton{padding:4px 5px;display:inline-flex;align-items:center;justify-content:center;min-width:30px}
+    #android-workbench .cw-crumb{padding:10px 14px;color:var(--cw-muted);font-size:11px;overflow-wrap:anywhere;border-bottom:1px solid var(--cw-border)}
+    #android-workbench .cw-code{padding:14px 0;min-height:347px;font:12px/1.85 Consolas,'Cascadia Code',monospace}
+    #android-workbench .cw-line{display:flex;align-items:baseline;min-height:22px;padding-right:12px}
+    #android-workbench .cw-line.cw-highlight{background:var(--cw-select)}
+    #android-workbench .cw-lineno{color:var(--cw-muted);width:40px;flex:0 0 40px;text-align:right;padding-right:11px;user-select:none;font-size:11px}
+    #android-workbench .cw-linecode{min-width:0;flex:1;white-space:pre-wrap;overflow-wrap:anywhere}
+    #android-workbench .cw-symbol{font:inherit;color:var(--cw-blue);padding:0;min-height:0;border-radius:0;vertical-align:baseline;text-decoration:underline;text-decoration-color:var(--cw-border);text-underline-offset:3px}
+    #android-workbench .cw-keyword{color:light-dark(#9250a5,#c8a0e2)}
+    #android-workbench .cw-comment{color:var(--cw-muted)}
+    #android-workbench .cw-editarea{padding:12px}
+    #android-workbench textarea{width:100%;height:337px;resize:vertical;white-space:pre-wrap;background:var(--cw-bg);border:1px solid var(--cw-border);border-radius:5px;padding:10px;font:12px/1.85 Consolas,monospace;overflow-wrap:anywhere}
+    #android-workbench .cw-editactions{display:flex;justify-content:flex-end;gap:6px;padding-top:8px}
+    #android-workbench .cw-primary{background:var(--cw-blue);color:var(--cw-bg)}
+    #android-workbench .cw-primary:hover{background:var(--cw-blue);filter:brightness(.95)}
+    #android-workbench .cw-history{padding:9px 12px;border-top:1px solid var(--cw-border);display:flex;align-items:center;gap:3px;flex-wrap:wrap}
+    #android-workbench .cw-history-label{font-size:11px;color:var(--cw-muted);margin-right:5px}
+    #android-workbench .cw-history button{font-size:11px;color:var(--cw-blue);padding:3px 5px;min-height:27px;overflow-wrap:anywhere}
+    #android-workbench .cw-inspector{background:var(--cw-panel);border-left:1px solid var(--cw-border);min-width:0;padding-bottom:10px}
+    #android-workbench .cw-inspector-head{padding:12px;border-bottom:1px solid var(--cw-border);font-weight:500}
+    #android-workbench .cw-symbol-name{padding:12px 12px 4px;font:500 13px/1.6 Consolas,monospace;color:var(--cw-blue);overflow-wrap:anywhere}
+    #android-workbench .cw-relation-note{font-size:11px;color:var(--cw-muted);padding:0 12px 10px}
+    #android-workbench .cw-definition{padding:9px 10px;margin:0 7px 6px;border:1px solid var(--cw-border);border-radius:6px;background:var(--cw-bg);width:calc(100% - 14px);display:block}
+    #android-workbench .cw-definition span{display:block;font-size:11px;overflow-wrap:anywhere}
+    #android-workbench .cw-definition .cw-defname{font-size:12px;font-weight:500}
+    #android-workbench .cw-evidence{margin-top:7px;color:var(--cw-orange)}
+    #android-workbench .cw-refs{margin-top:8px;border-top:1px solid var(--cw-border);padding-top:3px}
+    #android-workbench .cw-ref{display:block;width:calc(100% - 12px);margin:0 6px 3px;font-size:11px;padding:6px;overflow-wrap:anywhere}
+    #android-workbench .cw-foot{border-top:1px solid var(--cw-border);padding:8px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:11px;color:var(--cw-muted);background:var(--cw-panel)}
+    #android-workbench .cw-status{color:var(--cw-green)}
+    #android-workbench .cw-empty{padding:20px 12px;color:var(--cw-muted);font-size:12px}
+    #android-workbench .cw-diffline{font:12px/1.85 Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;padding:3px 12px}
+    #android-workbench .cw-added{background:var(--cw-add);color:var(--cw-green)}
+    #android-workbench .cw-removed{background:var(--cw-remove);color:light-dark(#a04141,#f1aaaa)}
+    #android-workbench .cw-diffhead{padding:10px 12px;font-size:11px;color:var(--cw-muted)}
+    #android-workbench i,#android-workbench svg{width:15px;height:15px;flex-shrink:0;vertical-align:middle}
+    @media(max-width:920px){#android-workbench .cw-layout{grid-template-columns:205px minmax(0,1fr)}#android-workbench .cw-inspector{grid-column:1/-1;border-left:0;border-top:1px solid var(--cw-border);display:grid;grid-template-columns:1fr 1fr;align-items:start}#android-workbench .cw-inspector-head{grid-column:1/-1}#android-workbench .cw-refs{margin-top:0;border-top:0}}
+    @media(max-width:560px){#android-workbench .cw-layout{grid-template-columns:minmax(0,1fr)}#android-workbench .cw-sidebar{border-right:0;border-bottom:1px solid var(--cw-border)}#android-workbench .cw-results{display:grid;grid-template-columns:1fr 1fr}#android-workbench .cw-result{padding:8px}#android-workbench .cw-snippet{display:none}#android-workbench .cw-inspector{grid-template-columns:1fr}#android-workbench .cw-shortcut{display:none}#android-workbench .cw-top{padding:10px}#android-workbench .cw-searchbar{padding:10px}#android-workbench .cw-brand{font-size:14px}#android-workbench .cw-code{font-size:12px}#android-workbench input{font-size:16px}#android-workbench .cw-tag{font-size:11px}}
+    @media(pointer:coarse){#android-workbench button{min-height:44px}#android-workbench .cw-symbol{min-height:32px}#android-workbench input{font-size:16px}}
+  
+html,body{margin:0;padding:0;background:light-dark(#f6f8fb,#171c24);color-scheme:light dark}
+body{padding:16px}
+#android-workbench{max-width:1440px;margin:0 auto}
+#android-workbench .cursor-interaction{cursor:pointer}
+#android-workbench .cw-icontext{display:inline-block;min-width:15px;text-align:center;flex-shrink:0}
+@media(max-width:560px){body{padding:6px}}
+
+/* P1 新增：数据来源切换、搜索选项、未就绪状态、真实目录树 */
+#android-workbench [hidden]{display:none!important}
+#android-workbench .cw-real{color:var(--cw-green);border:1px solid var(--cw-border);background:var(--cw-bg)}
+#android-workbench .cw-modepick{display:flex;gap:3px;padding:2px;border:1px solid var(--cw-border);border-radius:6px;background:var(--cw-bg)}
+#android-workbench .cw-modepick button{font-size:11px;min-height:26px;padding:3px 8px}
+#android-workbench .cw-minifield{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--cw-muted);border:1px solid var(--cw-border);border-radius:6px;background:var(--cw-bg);padding:2px 8px}
+#android-workbench .cw-minifield input{width:180px;background:transparent;border:0;outline-offset:2px;font:11px/1.6 Consolas,monospace;padding:3px 0}
+#android-workbench .cw-minifield select{background:transparent;border:0;font-size:11px;padding:3px 0}
+#android-workbench .cw-minifield button{font-size:11px;min-height:26px;padding:3px 8px}
+#android-workbench .cw-opts{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--cw-muted);flex-wrap:wrap}
+#android-workbench .cw-opts label{display:flex;align-items:center;gap:4px}
+#android-workbench .cw-opts input{accent-color:var(--cw-blue)}
+#android-workbench .cw-banner{margin:0;padding:9px 16px;font-size:12px;color:var(--cw-orange);background:var(--cw-panel);border-bottom:1px solid var(--cw-border)}
+#android-workbench .cw-note{padding:8px 12px;font-size:11px;color:var(--cw-muted);overflow-wrap:anywhere}
+#android-workbench .cw-note-error{color:light-dark(#a04141,#f1aaaa)}
+#android-workbench .cw-empty-sub{margin-top:6px;font-size:11px;color:var(--cw-muted);line-height:1.7}
+#android-workbench .cw-empty-error{color:light-dark(#a04141,#f1aaaa)}
+#android-workbench .cw-src{margin-left:auto;font:10px/1.4 Consolas,monospace;color:var(--cw-muted);border:1px solid var(--cw-border);border-radius:3px;padding:1px 4px}
+#android-workbench .cw-treeitem{cursor:pointer}
+#android-workbench .cw-treeitem.cw-blocked{color:var(--cw-muted);text-decoration:line-through}
+#android-workbench .cw-notready{margin:0 8px 8px;padding:10px 11px;border:1px dashed var(--cw-border);border-radius:6px;background:var(--cw-bg);font-size:11px;color:var(--cw-muted);line-height:1.7}
+#android-workbench .cw-notready strong{display:block;margin-bottom:4px;font-size:12px;color:var(--cw-orange)}
+#android-workbench .cw-notready-unavailable strong,#android-workbench .cw-notready-error strong{color:var(--cw-orange)}
+#android-workbench .cw-realcode{min-height:200px}
+#android-workbench .cw-realcode .cw-line{cursor:text}
+#android-workbench .cw-realcode .cw-line:hover{background:var(--cw-panel)}
+#android-workbench .cw-status[data-kind=warn]{color:var(--cw-orange)}
+#android-workbench .cw-status[data-kind=error]{color:light-dark(#a04141,#f1aaaa)}
+#android-workbench .cw-scope select{background:transparent;border:0;color:var(--cw-blue);font-size:12px;max-width:280px}
