@@ -32,6 +32,34 @@ class LspTimeoutError(LspError):
     """请求超时。"""
 
 
+class LspResponseError(LspError):
+    """语言服务返回的 JSON-RPC error 响应（带 code，便于区分"可重试"与"真的不支持"）。"""
+
+    def __init__(self, message: str, *, code: int | None = None, method: str | None = None) -> None:
+        super().__init__(f"{message}（code={code}）")
+        self.message = message
+        self.code = code
+        self.method = method
+
+
+# clangd（实测 12.0.7）在"文档刚 didOpen、AST 还没建好"时会拒绝请求：
+#   trying to get AST for non-added document (code=-32602)
+# 这类错误稍后重试就会成功；其它错误必须如实上报，不能伪装成"没有结果"。
+NOT_READY_MARKERS = (
+    "non-added document",
+    "document is not open",
+    "not been added",
+    "no ast for",
+)
+
+
+def is_document_not_ready(error: BaseException) -> bool:
+    if not isinstance(error, LspResponseError):
+        return False
+    text = (error.message or "").lower()
+    return any(marker in text for marker in NOT_READY_MARKERS)
+
+
 class LspClient:
     def __init__(
         self,
@@ -202,7 +230,13 @@ class LspClient:
                 return
             if "error" in message:
                 error = message["error"] or {}
-                future.set_exception(LspError(f"{error.get('message', '语言服务返回错误')}（code={error.get('code')}）"))
+                future.set_exception(
+                    LspResponseError(
+                        error.get("message", "语言服务返回错误"),
+                        code=error.get("code"),
+                        method=error.get("data", {}).get("method") if isinstance(error.get("data"), dict) else None,
+                    )
+                )
             else:
                 future.set_result(message.get("result"))
             return

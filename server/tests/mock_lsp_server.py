@@ -10,6 +10,9 @@
 - 含 "slow"：延迟 5 秒再回复
 - 含 "crash"：直接 os._exit(3)
 - 含 "error"：返回 JSON-RPC error
+- 含 "cold"：第一次 definition 返回 -32602 "trying to get AST for non-added document"（clangd 12 实测行为），
+  第二次才返回位置（line 5, char 6）——位置特殊，只有真的重试过才会拿到
+- 含 "needsymbol"：先收到 textDocument/documentSymbol 才肯回答 definition（验证客户端发了就绪屏障）
 initialize 之前会先向客户端发一个 workspace/configuration 请求，
 客户端若不回复，initialize 会一直等——这正是 clangd 等真实服务器的行为。
 """
@@ -22,6 +25,8 @@ import time
 
 PENDING_CONFIG_ID = 9001
 _config_reply: dict | None = None
+_cold_seen: dict = {}  # uri → 收到过几次 definition（cold 模式用）
+_symbol_seen: set = set()  # 收到过 documentSymbol 的 uri（needsymbol 模式用）
 
 
 def read_message():
@@ -62,6 +67,11 @@ def location(uri: str, line: int, character: int) -> dict:
     }
 
 
+def not_ready_error() -> dict:
+    """复现 clangd 12.0.7 的真实拒绝：刚 didOpen 就请求定义。"""
+    return {"__error__": {"code": -32602, "message": "trying to get AST for non-added document"}}
+
+
 def handle_definition(uri: str, params: dict):
     if "crash" in uri:
         log("crash requested")
@@ -70,6 +80,15 @@ def handle_definition(uri: str, params: dict):
         return {"__error__": {"code": -32601, "message": "mock: method not found"}}
     if "slow" in uri:
         time.sleep(5)
+    # cold：第一次请求必定被拒（模拟 clangd 的 non-added document），第二次给一个"只有重试过才会拿到"的位置
+    if "cold" in uri:
+        _cold_seen[uri] = _cold_seen.get(uri, 0) + 1
+        if _cold_seen[uri] == 1:
+            return not_ready_error()
+        return location(uri, 5, 6)
+    # needsymbol：只有先收到过 documentSymbol（就绪屏障）才肯回答，用于验证屏障确实发出去了
+    if "needsymbol" in uri and uri not in _symbol_seen:
+        return not_ready_error()
     if "empty" in uri:
         return None
     if "ambiguous" in uri:
@@ -130,6 +149,13 @@ def main() -> int:
             params = message.get("params") or {}
             uri = (params.get("textDocument") or {}).get("uri", "")
             send({"jsonrpc": "2.0", "id": message["id"], "result": handle_references(uri, params)})
+            continue
+        if method == "textDocument/documentSymbol":
+            params = message.get("params") or {}
+            uri = (params.get("textDocument") or {}).get("uri", "")
+            _symbol_seen.add(uri)
+            log(f"documentSymbol for {uri}")
+            send({"jsonrpc": "2.0", "id": message["id"], "result": []})
             continue
         if "id" in message:
             send({"jsonrpc": "2.0", "id": message["id"], "result": None})

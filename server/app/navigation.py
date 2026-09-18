@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import time
 from dataclasses import dataclass
@@ -16,7 +17,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from .config import AppConfig, RootConfig
-from .lsp.client import LspError, LspProcessError, LspTimeoutError
+from .lsp.client import LspError, LspProcessError, LspTimeoutError, is_document_not_ready
 from .lsp.manager import LanguageServerManager, ServerHandle
 from .lsp.positions import make_range, split_lines, word_at
 
@@ -49,6 +50,8 @@ METHOD_BY_KIND = {
 }
 EVIDENCE_LIMIT = 200
 MAX_SOURCE_BYTES = 4 * 1024 * 1024
+# "文档还没就绪"时的退避间隔（秒）：实测第一次重试就够了，多留一次以防索引线程正好在忙
+NOT_READY_RETRY_DELAYS = (0.25, 1.0)
 
 
 @dataclass
@@ -226,8 +229,17 @@ class NavigationService:
         }
 
         uri = resolved_path.as_uri()
+        first_open = not handle.has_document(uri)
         document_version = handle.open_document(uri, "cpp", snapshot.text, version=1)
         base["documentVersion"] = document_version
+        if first_open:
+            # 刚打开的文档先确认语言服务已经收下，避免第一次请求必然失败（见 warm_up_document 注释）
+            warm = await handle.warm_up_document(
+                uri, timeout=min(self.config.navigation.request_timeout_seconds, 10)
+            )
+            base["documentWarmUp"] = warm
+            if warm != "ok":
+                base["hints"].append(f"文档就绪确认未成功（{warm}），已按重试方式继续")
 
         params: dict[str, Any] = {
             "textDocument": {"uri": uri},
@@ -239,7 +251,7 @@ class NavigationService:
         method = METHOD_BY_KIND[kind]
         handle.request_count += 1
         try:
-            raw = await handle.client.request(method, params, timeout=self.config.navigation.request_timeout_seconds)
+            raw = await self._request_navigation(handle, method, params)
         except LspTimeoutError as exc:
             base["status"] = STATUS_UNAVAILABLE
             base["reason"] = f"语言服务超时：{exc}"
@@ -257,6 +269,7 @@ class NavigationService:
             return self._finish(base, started)
         finally:
             await self.manager.release(handle)
+
 
         targets = self._normalize_targets(raw, root, kind)
         base["targets"] = targets
@@ -294,6 +307,24 @@ class NavigationService:
             if arg.startswith("--compile-commands-dir="):
                 return arg.split("=", 1)[1]
         return None
+
+    async def _request_navigation(self, handle, method: str, params: dict[str, Any]) -> Any:
+        """发导航请求，并在"文档尚未就绪"这类可重试错误上退避重试。
+
+        实测 clangd 12.0.7 会在 didOpen 之后立刻拒绝第一次请求（-32602 non-added document）；
+        重试一次即可成功。其它错误原样抛出，交给上层如实上报——不能把它变成"没有结果"。
+        导航请求是只读且幂等的，重试安全。
+        """
+        timeout = self.config.navigation.request_timeout_seconds
+        attempt = 0
+        while True:
+            try:
+                return await handle.client.request(method, params, timeout=timeout)
+            except LspError as exc:
+                if attempt >= len(NOT_READY_RETRY_DELAYS) or not is_document_not_ready(exc):
+                    raise
+                await asyncio.sleep(NOT_READY_RETRY_DELAYS[attempt])
+                attempt += 1
 
     def _normalize_targets(self, raw: Any, root: RootConfig, kind: str) -> list[dict]:
         entries: list[Any] = []

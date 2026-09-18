@@ -15,7 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from app.lsp import LspClient, LspError, LspProcessError, LspTimeoutError
+from app.lsp import LspClient, LspError, LspProcessError, LspResponseError, LspTimeoutError
+from app.lsp.client import is_document_not_ready
 from app.lsp.positions import (
     codepoint_to_utf16,
     column_to_codepoint,
@@ -154,6 +155,43 @@ def test_empty_and_error_results_are_distinguishable(tmp_path):
             await client.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_response_error_carries_code_and_not_ready_detection(tmp_path):
+    """clangd 的 -32602 "non-added document" 要能被识别成"可重试"，其它错误不能。"""
+
+    async def scenario():
+        client = await start_client(tmp_path)
+        try:
+            with pytest.raises(LspResponseError) as excinfo:
+                await client.request(
+                    "textDocument/definition", {"textDocument": {"uri": URI.replace(".cpp", "cold.cpp")}}
+                )
+            error = excinfo.value
+            assert error.code == -32602
+            assert is_document_not_ready(error) is True
+            # 同一个 uri 第二次就能成功（说明这类错误确实是暂态）
+            second = await client.request(
+                "textDocument/definition", {"textDocument": {"uri": URI.replace(".cpp", "cold.cpp")}}
+            )
+            assert second["range"]["start"] == {"line": 5, "character": 6}
+
+            with pytest.raises(LspError) as other:
+                await client.request(
+                    "textDocument/definition", {"textDocument": {"uri": URI.replace(".cpp", "error.cpp")}}
+                )
+            assert is_document_not_ready(other.value) is False
+        finally:
+            await client.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_is_document_not_ready_ignores_other_error_kinds():
+    assert is_document_not_ready(LspProcessError("语言服务已退出")) is False
+    assert is_document_not_ready(LspTimeoutError("超时")) is False
+    assert is_document_not_ready(LspError("trying to get AST for non-added document")) is False  # 基类不算
+    assert is_document_not_ready(LspResponseError("Document is not open", code=-32001)) is True
 
 
 def test_request_timeout_does_not_kill_server(tmp_path):

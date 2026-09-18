@@ -8,7 +8,14 @@
 定位说明：这一层只把"真实语言服务返回的位置"如实交给上层，
 不做任何"猜一个同名符号"的兜底——那是候选（symbol/text）层的事。
 """
-from .client import LspClient, LspError, LspProcessError, LspTimeoutError
+from .client import (
+    LspClient,
+    LspError,
+    LspProcessError,
+    LspResponseError,
+    LspTimeoutError,
+    is_document_not_ready,
+)
 from .positions import (
     codepoint_column_to_utf16,
     codepoint_to_utf16,
@@ -26,7 +33,9 @@ __all__ = [
     "LspClient",
     "LspError",
     "LspProcessError",
+    "LspResponseError",
     "LspTimeoutError",
+    "is_document_not_ready",
     "LspProtocolError",
     "MessageBuffer",
     "encode_message",

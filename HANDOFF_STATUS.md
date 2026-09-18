@@ -55,12 +55,14 @@ python3 scripts/setup-navigation.py --print-only  # 只探测不改文件
 | LSP/导航测试（独立进程 mock LSP） | 36 项：分帧、握手、服务端请求应答、单请求超时不影响进程、进程崩溃带 stderr；resolved/ambiguous/references 不判歧义/空结果/stale/位置越界/Java 未接入/实例复用/中文路径/emoji 列号/工作区外目标标记 |
 | 启动服务 + `scripts/verify-p1-http.py` | **26/26**（含 Java 明确未接入、坐标基准、能力矩阵如实上报） |
 | `scripts/verify-p1-browser.py`（本机 Chromium） | **24/24**：真实点击标识符 → 真实 `/api/navigation` → 显示"未就绪 + 真实原因"，无 JS 异常 |
-| `scripts/verify-p2-navigation.py --direct`（本机） | 退出码 **2**：本机没有 clangd，脚本如实报告 FAIL，**没有**把跑不了算成通过 |
+| **真机 clangd 12.0.7**（公司服务器 + AOSP12 prebuilts）跑 12 条预期 | **5/12**：C++ 7 条中 5 过、2 败；Java 5 条按预期报"未接入"。2 个失败集中在 **main.cpp / state.cpp 各自开头的第一次请求**，原因 `-32602 trying to get AST for non-added document`（刚 didOpen、AST 未就绪）→ 已修：**首次打开后先发 documentSymbol 做就绪确认 + 导航请求对这类暂态错误退避重试**（mock LSP 覆盖了冷启动两种情形） |
+| `scripts/verify-p2-navigation.py --direct`（本机无 clangd时） | 退出码 **2**：脚本如实报告 FAIL，**没有**把跑不了算成通过 |
 | `scripts/find-source-server.sh`（伪造 AOSP + manifest） | 三类证据全部提取成功，两个 shell 脚本 `bash -n` 通过 |
 
 ## 未完成（禁止对外宣称已实现）
 
-- **真机 clangd 的 12 条预期尚未跑过**（本机没有 clangd）：`python3 scripts/verify-p2-navigation.py --direct`。
+- 真机 clangd 只跑过一轮（5/12，修复已推送但**尚未重跑**）；C++ 的其它六条里已过 5 条，
+  修完预期 7/7，需实测确认。命令：`python3 scripts/verify-p2-navigation.py --direct`。
 - Java（JDT LS + Soong/classpath）、Kotlin、Rust、AIDL 未接入；AOSP 的 `compile_commands.json`、
   `--query-driver` 等工具链适配未做；全库索引（P3）、写入（P4）、JNI/Binder 关联（P5）未开始。
 
@@ -85,15 +87,14 @@ python3 scripts/setup-navigation.py --print-only  # 只探测不改文件
 
 ## 下一步
 
-1. **你**：登记现成源码树并跑验收（不需要 clone、也不需要先装 pip）：
+1. **你**：重跑一次验收（配置已就绪，不需要再改任何东西）：
 
    ```bash
    cd ~/android-source-workbench && git pull
-   python3 scripts/setup-navigation.py --add-root /data/home/yangyang/aosp12
    python3 scripts/verify-p2-navigation.py --direct --workspace fixtures
    ```
 
-   把输出发我。然后在页面上点几个真实 `frameworks/base` 的 C++ 符号，告诉我哪些跳得准、哪些为空。
+   期望 C++ 7 条全过；Java 5 条仍是"未接入"（P2 后半）。把输出发我。
 2. **我**：按反馈修 P2 解析问题（`--query-driver`、compdb 探测、超时调整），再做 Java 半边
    （JDT LS + Soong 导入适配，单独记录支持矩阵与失败诊断）。
 3. 之后进入 P3（Zoekt 索引），需要源码规模数据（文件数、数据量、机器配置、是否 repo 管理）。

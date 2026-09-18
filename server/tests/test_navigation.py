@@ -61,6 +61,8 @@ def cpp_tree(tmp_path: Path) -> Path:
     (root / "ambiguous.cpp").write_text(MAIN_CPP, encoding="utf-8")
     (root / "empty.cpp").write_text(MAIN_CPP, encoding="utf-8")
     (root / "crash.cpp").write_text(MAIN_CPP, encoding="utf-8")
+    (root / "cold.cpp").write_text(MAIN_CPP, encoding="utf-8")
+    (root / "needsymbol.cpp").write_text(MAIN_CPP, encoding="utf-8")
     (root / "中文目录").mkdir()
     (root / "中文目录" / "带中文.cpp").write_text("int x = 1;\n", encoding="utf-8")
     return root
@@ -116,6 +118,25 @@ def test_definition_is_resolved_from_language_server(tmp_path, cpp_tree):
         assert body["positionUnit"] == "utf-16"
         assert body["symbol"] is None or isinstance(body["symbol"], str)
         assert body["sourceVersion"] is None  # 未带版本时不判定 stale
+
+
+def test_retries_when_server_says_document_not_added(tmp_path, cpp_tree):
+    """实测 clangd 12.0.7：刚 didOpen 后第一次 definition 会被拒（non-added document），重试即成功。"""
+    app, _config, _manager = build_app(tmp_path, cpp_tree)
+    with TestClient(app) as client:
+        body = navigate(client, "cold.cpp", line=5, character=16).json()
+    assert body["status"] == "resolved"
+    # 5:6 是 mock 只在"第二次请求"才返回的位置：拿到它就证明真的重试过
+    assert body["targets"][0]["range"]["start"] == {"line": 5, "character": 6}
+
+
+def test_first_open_sends_readiness_barrier(tmp_path, cpp_tree):
+    """刚打开的文档先做一次 documentSymbol 就绪确认，否则第一次请求必然失败。"""
+    app, _config, _manager = build_app(tmp_path, cpp_tree)
+    with TestClient(app) as client:
+        body = navigate(client, "needsymbol.cpp", line=5, character=16).json()
+    assert body["status"] == "resolved"
+    assert body["documentWarmUp"] == "ok"
 
 
 def test_multiple_targets_are_ambiguous_not_silently_first(tmp_path, cpp_tree):

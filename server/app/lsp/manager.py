@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .client import LspClient, LspError, LspProcessError
+from .client import LspClient, LspError, LspProcessError, is_document_not_ready
 
 
 @dataclass
@@ -86,11 +86,38 @@ class ServerHandle:
         )
         return next_version
 
+    def has_document(self, uri: str) -> bool:
+        return uri in self.documents
+
+    async def warm_up_document(self, uri: str, *, timeout: float = 10.0) -> str:
+        """didOpen 之后确认语言服务真的收下了这个文档。
+
+        实测 clangd 12.0.7：刚 didOpen 的文档如果立刻发 textDocument/definition，会回
+        `trying to get AST for non-added document (code=-32602)`——第一次请求失败，第二次就正常。
+        这里发一个同样需要 AST 的轻量请求（documentSymbol）并等它返回，把这段竞态消掉；
+        这个请求本身也可能撞上同一个暂态错误，所以同样重试；都失败也不影响后续流程，
+        真正的导航请求还有退避重试兜底。
+        """
+        attempt = 0
+        while True:
+            try:
+                await self.client.request(
+                    "textDocument/documentSymbol", {"textDocument": {"uri": uri}}, timeout=timeout
+                )
+                return "ok"
+            except LspError as exc:
+                if attempt >= len(WARM_UP_RETRY_DELAYS) or not is_document_not_ready(exc):
+                    return f"未完成：{exc}"
+                await asyncio.sleep(WARM_UP_RETRY_DELAYS[attempt])
+                attempt += 1
+
     def close_document(self, uri: str) -> None:
         if uri in self.documents and self.client.alive:
             self.client.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
         self.documents.pop(uri, None)
 
+
+WARM_UP_RETRY_DELAYS = (0.2, 0.8)
 
 CLANGD_PREBUILT_GLOBS = (
     "prebuilts/clang/host/linux-x86/*/bin/clangd",
