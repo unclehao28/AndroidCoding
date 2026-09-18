@@ -76,6 +76,72 @@ export PATH="$HOME/bin:$PATH"          # 建议写进 ~/.bashrc
 rg --version
 ```
 
+## 3.5 远程 / 内网 Git 仓库作为只读工作区
+
+场景：公司内网仓（GitLab / Gerrit / 自建）或公开 AOSP 镜像，不想在服务器上手工 clone 一遍再配路径。
+在 `roots[]` 里加上 `git` 字段，工作台负责 clone / fetch，Windows 侧只读浏览与检索。
+
+```json
+{
+  "cacheDir": "/data/home/you/.asw-cache",
+  "roots": [
+    {
+      "id": "company-frameworks-base",
+      "name": "内网 platform/frameworks/base",
+      "path": "frameworks-base",                      // 相对 cacheDir 的检出目录
+      "readonly": true,
+      "git": {
+        "url": "git@gitlab.company.com:aosp/platform_frameworks_base.git",
+        "ref": "main",                                 // 分支或标签，可省略
+        "depth": 1,                                    // 浅克隆，1 最省时间与磁盘
+        "sparsePaths": ["services/core/java", "core/java"]   // 只要这几个目录，可省略
+      }
+    },
+    {
+      "id": "aosp-system-core",
+      "name": "AOSP platform/system/core（TUNA 镜像）",
+      "path": "aosp-system-core",
+      "readonly": true,
+      "git": {
+        "url": "https://mirrors.tuna.tsinghua.edu.cn/git/AOSP/platform/system/core",
+        "ref": "main",
+        "depth": 1,
+        "sparsePaths": ["libcutils", "adb"]
+      }
+    }
+  ]
+}
+```
+
+同步与查看状态（也可以在页面上点「同步远程仓库」）：
+
+```bash
+python3 -m app --config config.json --git-status      # 只看状态，不做任何写操作
+python3 -m app --config config.json --sync            # 同步全部远程工作区
+python3 -m app --config config.json --sync aosp-system-core   # 只同步一个
+```
+
+行为保证（代码里写死，不是口头承诺）：
+
+- 只执行 `clone` / `fetch` / `checkout --detach` / `merge --ff-only`；**不会** `reset --hard`、`clean`、`rebase`，
+  也**不会**自动提交或推送。浅克隆更新走 `checkout --detach`（浅历史没有共同祖先，无法 merge）。
+- 缓存目录里出现**本地修改**时拒绝更新，如实报告，绝不覆盖。
+- 上一次 clone 被取消或中断留下的半成品（只有 `.git`、没有 HEAD）会在下次同步时先清掉再重来。
+- 认证只用服务器上**既有**的 git/SSH 凭据（`~/.ssh`、`credential helper`、`url.insteadOf` 改写）；
+  工作台不保存口令或私钥。SSH 用 `BatchMode=yes`、HTTPS 用 `GIT_TERMINAL_PROMPT=0`，
+  凭据不可用时立即失败并给出 git 原始输出，不会卡在交互式输入上。
+- 远程工作区在 P1 只有只读能力（配置 `readonly: false` 会直接拒绝启动）；真实写入与提交属于 P4。
+
+公开 AOSP 来源实测（2026-09-18，中国大陆网络）：
+
+| 来源 | 可达性 |
+|---|---|
+| `https://mirrors.tuna.tsinghua.edu.cn/git/AOSP/platform/<repo>` | 可 `git ls-remote`；clone 可能排队（`remote: Waiting in queue...`），适合用 `depth` + `sparsePaths` 缩小规模 |
+| `https://github.com/aosp-mirror/<repo>` | 可 `git ls-remote`（`platform_frameworks_base` 有 `main`/`master`） |
+| `https://android.googlesource.com/platform/<repo>` | 本次实测连接超时（21s），内网多半也不通 |
+
+内网 GitLab 仓如果只在公司网络可达，把地址换成 SSH 形式即可；服务器上已有的免密 key 会被直接复用。
+
 ## 4. 配置允许访问的源码根目录
 
 ```bash

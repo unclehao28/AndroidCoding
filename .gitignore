@@ -8,5 +8,8 @@ venv/
 # 本地配置：可能含服务器真实路径，不随包分发
 server/config.json
 
+# 远程仓库缓存目录（config.json 的 cacheDir 默认指向这里）
+.asw-cache/
+
 # 临时日志
 *.log

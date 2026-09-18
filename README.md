@@ -32,7 +32,8 @@ P1 已实现的真实能力：健康状态、工作区列表、按层目录浏�
 - `prototype/api.js`：后端接口客户端（健康、工作区、目录、文件、检索、取消、导航）。
 - `prototype/app.js`：界面与两种数据来源的切换逻辑；真实模式只走 `/api`，不回退示例数据。
 - `server/config.example.json`：后端配置示例（允许的源码根、监听地址、限额、排除规则）。
-- `server/app/`：FastAPI 后端（`config.py` 配置校验、`pathtools.py` 路径与编码、`search.py` 检索引擎、`main.py` 接口）。
+- `server/app/`：FastAPI 后端（`config.py` 配置校验、`pathtools.py` 路径与编码、`search.py` 检索引擎、`gitremote.py` 远程仓库同步、`main.py` 接口）。
+- `server/config.example.json`：带注释的配置示例（支持 `//` 与 `/* */` 注释）。
 - `server/tests/`：pytest 测试（配置、路径边界、接口、检索限制与取消、真实扫描取消）。
 - `server/requirements.txt`：锁定版本的后端运行时依赖（Python >= 3.10）。
 - `server/requirements-py38.txt`：Python 3.8/3.9 服务器的运行时依赖（含 cp38 的编译扩展版本）。
@@ -69,7 +70,21 @@ python3 -m app --config config.json --check-config   # 配置与环境自查，�
 服务默认监听 `127.0.0.1:8787`。**不要**把源码根目录写成 `/` 或 `$HOME`：`roots` 只列出确实需要的工作区，服务不会遍历整台服务器。
 
 在真实安卓源码上部署（含内网镜像/完全离线装依赖、ripgrep 安装、AOSP 配置建议、故障排查）见
-[`docs/DEPLOY.md`](docs/DEPLOY.md)。测试依赖是单独的 `server/requirements-dev.txt`。
+[`docs/DEPLOY.md`](docs/DEPLOY.md)。测试依赖是单独的 `server/requirements-dev.txt`（Python 3.8 用 `requirements-py38-dev.txt`）。
+
+### 远程 / 内网仓库作为只读工作区
+
+在 `roots[]` 里给远程仓库加 `git` 字段（`url` / `ref` / `depth` / `sparsePaths`），工作台负责 clone、fetch，
+页面提供「同步远程仓库」按钮：
+
+```bash
+python3 -m app --config config.json --git-status            # 查看本地/远程工作区状态
+python3 -m app --config config.json --sync [workspace-id]   # clone 或 fetch 更新
+```
+
+只做 `clone` / `fetch` / `checkout --detach` / `merge --ff-only`；不会 `reset --hard`、不会自动提交或推送，
+缓存里有本地修改时拒绝更新。认证只用服务器上既有的 git/SSH 凭据（含 `url.insteadOf` 改写），工作台不保存凭据。
+公开仓实测：清华 TUNA 的 AOSP 镜像与 GitHub `aosp-mirror` 可达，`android.googlesource.com` 常连不上。
 
 ### Windows 客户端
 

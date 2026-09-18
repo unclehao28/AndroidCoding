@@ -1,16 +1,29 @@
 {
-  "_comment": [
-    "安卓源码工作台后端配置（P1）。复制为 server/config.json 后按服务器实际情况修改。",
-    "roots[].path 支持绝对路径或相对本文件所在目录的路径；只能列出确实需要的源码根目录，不要写 /。",
-    "配置校验：cd server && python -m app --config config.json --check-config",
-    "字段名不允许拼错：未知字段、类型错误、越界数值、不存在的根目录都会导致启动失败并列出全部问题。",
-    "端口默认 8787 而不是 8765：8765 常被本机代理工具（如 Clash）占用，会导致 SSH 本地转发绑定失败。"
-  ],
+  // 安卓源码工作台后端配置（P1）。复制为 server/config.json 后按服务器实际情况修改。
+  // 配置支持 // 与 /* */ 注释，也支持顶层 "_comment" 字段。
+  // 校验与自查：cd server && python3 -m app --config config.json --check-config
+  //
+  // 本地目录根：path 指向已存在的源码目录（相对路径以本文件所在目录为准）。
+  // 远程仓库根：提供 git.url，path 是缓存检出目录（相对 cacheDir），
+  //   用 python3 -m app --sync <id> 拉取，或在页面上点「同步远程仓库」。
+  //   远程工作区为只读：只做 clone / fetch / merge --ff-only（浅克隆用 checkout --detach），
+  //   绝不 reset --hard，也不自动提交或推送；缓存里出现本地修改时拒绝更新。
+  //   认证使用服务器上既有的 git/SSH 凭据（~/.ssh、credential helper、url.insteadOf），不保存口令或私钥。
+  // 内网仓库示例： "url": "git@gitlab.company.com:aosp/platform_frameworks_base.git"
+  // 公开仓实测（中国大陆网络）：清华 TUNA 镜像与 GitHub aosp-mirror 可达，
+  //   android.googlesource.com 常常连不上。整套 AOSP 建议 depth=1 加 sparsePaths。
+  // 字段名不允许拼错：未知字段、类型错误、越界数值、不存在的根目录都会导致启动失败并列出全部问题。
+  // 端口默认 8787 而不是 8765：8765 常被本机代理工具（如 Clash）占用，会导致 SSH 本地转发绑定失败。
+
   "server": {
     "host": "127.0.0.1",
     "port": 8787,
     "corsOrigins": ["*"]
   },
+
+  // 远程仓库的本地缓存父目录；只有配置了 git 的根目录才需要
+  "cacheDir": "../.asw-cache",
+
   "roots": [
     {
       "id": "demo",
@@ -23,8 +36,22 @@
       "name": "验收样例（fixtures）",
       "path": "../fixtures",
       "readonly": true
+    },
+    {
+      // 公开 AOSP 子仓示例：真实存在且可 clone，但很大会排队，所以用 depth + sparsePaths 缩小规模
+      "id": "aosp-system-core",
+      "name": "AOSP platform/system/core（TUNA 镜像）",
+      "path": "aosp-system-core",
+      "readonly": true,
+      "git": {
+        "url": "https://mirrors.tuna.tsinghua.edu.cn/git/AOSP/platform/system/core",
+        "ref": "main",
+        "depth": 1,
+        "sparsePaths": ["libcutils", "adb"]
+      }
     }
   ],
+
   "limits": {
     "maxFileBytes": 2097152,
     "maxLineCount": 2000,
@@ -35,9 +62,13 @@
     "maxConcurrentSearches": 2,
     "maxRegexLength": 200,
     "maxLineLength": 400,
-    "rgThreads": 2
+    "rgThreads": 2,
+    // 远程仓库 clone/fetch 的上限（秒）
+    "syncTimeoutSeconds": 3600
   },
+
   "search": {
+    // auto：有 rg 用 rg，没有则退回受限的 Python 扫描
     "engine": "auto",
     "respectIgnoreFiles": true,
     "pythonMaxFiles": 20000,
@@ -55,9 +86,12 @@
       "*.zip"
     ]
   },
+
+  // P1 必须保持 false：写成 true 会拒绝启动（防止把未实现能力当成已开启）
   "features": {
     "write": false,
     "navigation": false
   },
+
   "prototypeDir": "../prototype"
 }

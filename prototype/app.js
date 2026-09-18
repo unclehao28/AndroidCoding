@@ -47,6 +47,8 @@
     trail: [],
     nav: null,
     navWord: '',
+    sync: null,
+    syncTimer: null,
     notice: '这是内置示例数据，不是真实源码。切到「真实服务器」才会读取服务器上的文件。',
     status: '示例数据已加载'
   };
@@ -105,14 +107,21 @@
       const list = await api.workspaces(state.apiBase, {});
       state.serverInfo = health;
       state.workspaces = list.workspaces || [];
+      state.sync = list.sync || null;
       if (!state.workspaces.length) throw new api.ApiError('后端没有配置任何源码根目录');
       const known = state.workspaces.some(item => item.id === state.workspace);
       if (!known) state.workspace = state.workspaces[0].id;
       state.connection = 'ready';
       state.tree = {byPath: {}, expanded: {}};
-      setNotice(`已连接 ${state.apiBase} · 版本 ${health.version} · 检索 ${health.search.name}${health.search.version ? ' ' + health.search.version : ''}`);
-      setStatus('已切换为真实源码模式：读取服务器文件，连不上不会回退到示例数据');
-      if (!state.file && state.tab === 'files') loadTree('');
+      const selected = currentWorkspace();
+      if (selected && selected.remote && !selected.exists) {
+        setNotice(`工作区 ${selected.id} 是远程仓库，尚未同步到服务器本地缓存：${selected.path}。点「同步远程仓库」或让服务器执行 python3 -m app --sync ${selected.id}`);
+        setStatus('远程工作区未同步', 'warn');
+      } else {
+        setNotice(`已连接 ${state.apiBase} · 版本 ${health.version} · 检索 ${health.search.name}${health.search.version ? ' ' + health.search.version : ''}`);
+        setStatus('已切换为真实源码模式：读取服务器文件，连不上不会回退到示例数据');
+        if (!state.file && state.tab === 'files') loadTree('');
+      }
     } catch (error) {
       state.connection = 'error';
       state.connectionError = error.message || String(error);
@@ -122,8 +131,89 @@
     render();
   }
 
+  function currentWorkspace() {
+    return state.workspaces.find(item => item.id === state.workspace) || null;
+  }
+
+  function remoteWorkspaceNeedsSync() {
+    const selected = currentWorkspace();
+    return !!(selected && selected.remote && !selected.exists);
+  }
+
+  function startSyncPolling() {
+    stopSyncPolling();
+    state.syncTimer = setInterval(async () => {
+      await refreshSyncStatus();
+      if (!state.sync || !state.sync.running) {
+        stopSyncPolling();
+        await connectServer();
+        state.file = null;
+        state.tree = {byPath: {}, expanded: {}};
+        render();
+      }
+    }, 1500);
+  }
+
+  function stopSyncPolling() {
+    if (state.syncTimer) clearInterval(state.syncTimer);
+    state.syncTimer = null;
+  }
+
+  async function refreshSyncStatus() {
+    try {
+      state.sync = await api.syncStatus(state.apiBase, {});
+    } catch (error) {
+      setStatus('读取同步状态失败：' + (error.message || error), 'error');
+    }
+    renderTop();
+    renderBanner();
+    renderFoot();
+  }
+
+  async function startSync() {
+    const selected = currentWorkspace();
+    if (!selected || !selected.remote) return;
+    try {
+      const body = await api.startSync(state.apiBase, {workspace: selected.id});
+      state.sync = body.sync || state.sync;
+      setNotice(body.started
+        ? `已开始同步 ${selected.id}（只做 clone/fetch/checkout，不会 reset，也不会覆盖本地修改）`
+        : body.message);
+      setStatus(body.started ? '同步进行中…' : body.message, body.started ? 'ok' : 'warn');
+      if (body.started) startSyncPolling();
+    } catch (error) {
+      setNotice('同步请求失败：' + (error.message || error));
+      setStatus('同步失败：' + (error.message || error), 'error');
+    }
+    render();
+  }
+
+  async function cancelSync() {
+    try {
+      const body = await api.cancelSync(state.apiBase, {});
+      state.sync = body.sync || state.sync;
+      setStatus(body.cancelled ? '已发送取消同步' : '没有正在进行的同步任务', body.cancelled ? 'warn' : 'ok');
+    } catch (error) {
+      setStatus('取消同步失败：' + (error.message || error), 'error');
+    }
+    render();
+  }
+
+  function handleWorkspaceError(error) {
+    if (error && error.code === 'workspace_not_synced') {
+      const selected = currentWorkspace();
+      setNotice(error.message + (error.details && error.details.hint ? '（' + error.details.hint + '）' : ''));
+      setStatus('远程工作区未同步，请先同步', 'warn');
+      if (selected) selected.exists = false;
+      render();
+      return true;
+    }
+    return false;
+  }
+
   function useDemoMode() {
     cancelRunningSearch(true);
+    stopSyncPolling();
     state.dataMode = 'demo';
     state.notice = '这是内置示例数据，不是真实源码。切到「真实服务器」才会读取服务器上的文件。';
     setStatus('示例数据已加载');
@@ -149,7 +239,11 @@
       const body = await api.tree(state.apiBase, {workspace: state.workspace, path});
       state.tree.byPath[path] = {loading: false, entries: body.entries || [], truncated: body.truncated, limit: body.limit, error: ''};
     } catch (error) {
-      state.tree.byPath[path] = {loading: false, entries: [], error: error.message || String(error)};
+      if (handleWorkspaceError(error)) {
+        state.tree.byPath[path] = {loading: false, entries: [], error: ''};
+      } else {
+        state.tree.byPath[path] = {loading: false, entries: [], error: error.message || String(error)};
+      }
     }
     renderList();
   }
@@ -175,6 +269,7 @@
       setStatus(statusText, body.status === 'ok' ? 'ok' : 'warn');
     } catch (error) {
       if (error && error.name === 'AbortError') return;
+      if (handleWorkspaceError(error)) return;
       state.file = {status: 'error', path, lines: [], name: baseName(path), message: error.message || String(error)};
       setStatus('读取失败：' + (error.message || error), 'error');
     }
@@ -233,6 +328,7 @@
       if (error && error.name === 'AbortError') { setStatus('检索已取消（浏览器请求已中断）', 'warn'); return; }
       state.search = null;
       state.searchError = error.message || String(error);
+      handleWorkspaceError(error);
       setStatus('检索失败：' + state.searchError, 'error');
     } finally {
       if (state.searchRequestId === requestId) state.searching = false;
@@ -276,7 +372,15 @@
   // ---------------------------------------------------------------- 渲染
   function renderBanner() {
     const banner = $('cw-banner');
-    const text = state.notice || (state.dataMode === 'real' && state.connection === 'error' ? '后端未连接' : '');
+    const sync = state.sync;
+    let text = state.notice || (state.dataMode === 'real' && state.connection === 'error' ? '后端未连接' : '');
+    if (state.dataMode === 'real' && sync && (sync.running || (sync.status && sync.status !== 'idle'))) {
+      const tail = (sync.log || []).slice(-2).join(' ｜ ');
+      const head = sync.running
+        ? `正在同步 ${sync.workspaceId}（${(sync.steps || []).join(' → ') || '准备中'}）`
+        : `同步${sync.status === 'ready' ? '完成' : '：' + sync.status} · ${sync.workspaceId} · ${sync.message}`;
+      text = head + (tail ? ` ｜ ${tail}` : '') + (text ? ` ｜ ${text}` : '');
+    }
     banner.hidden = !text;
     banner.textContent = text || '';
   }
@@ -296,7 +400,15 @@
     const info = state.serverInfo || {};
     const engine = info.search ? info.search.name + (info.search.version ? ' ' + info.search.version : '') : '未知';
     const active = (info.activeSearches || []).length;
-    right.textContent = `真实模式 · ${state.workspace} · 引擎 ${engine} · 索引：未建立（P3） · 写入：未开放（P4）${active ? ' · 进行中检索 ' + active : ''}`;
+    const selected = currentWorkspace();
+    let remote = '';
+    if (selected && selected.remote) {
+      const gitState = selected.sync || {};
+      remote = selected.exists
+        ? ` · 远程 HEAD ${gitState.head || '—'}${gitState.shallow ? ' · 浅克隆' : ''}${gitState.dirtyFiles ? ' · 本地改动 ' + gitState.dirtyFiles + ' 个文件' : ''}`
+        : ' · 远程未同步';
+    }
+    right.textContent = `真实模式 · ${state.workspace} · 引擎 ${engine} · 索引：未建立（P3） · 写入：未开放（P4）${remote}${active ? ' · 进行中检索 ' + active : ''}`;
   }
 
   function renderTop() {
@@ -308,12 +420,24 @@
     $('cw-serverwrap').hidden = !real;
     $('cw-workwrap').hidden = !real || state.connection !== 'ready';
     $('cw-serverurl').value = state.apiBase;
+    const selected = currentWorkspace();
     const workSelect = $('cw-workspace');
     const options = state.workspaces.length
-      ? state.workspaces.map(item => `<option value="${esc(item.id)}"${item.id === state.workspace ? ' selected' : ''}${item.exists === false ? ' disabled' : ''}>${esc(item.name)}${item.exists === false ? '（不可用）' : ''}</option>`).join('')
+      ? state.workspaces.map(item => {
+        const suffix = item.remote
+          ? '（远程只读' + (item.exists ? '' : ' · 未同步') + '）'
+          : (item.exists === false ? '（不可用）' : '');
+        return `<option value="${esc(item.id)}"${item.id === state.workspace ? ' selected' : ''}>${esc(item.name)}${suffix}</option>`;
+      }).join('')
       : '<option value="">未连接</option>';
     if (workSelect.innerHTML !== options) workSelect.innerHTML = options;
-    workSelect.disabled = state.connection !== 'ready';
+    workSelect.disabled = state.connection !== 'ready' || state.workspaces.length < 2;
+
+    const syncRunning = !!(state.sync && state.sync.running);
+    const showSync = real && state.connection === 'ready' && !!(selected && selected.remote);
+    $('cw-sync').hidden = !showSync || syncRunning;
+    $('cw-sync').textContent = selected && selected.exists ? '同步远程仓库（fetch）' : '同步远程仓库（首次 clone）';
+    $('cw-sync-cancel').hidden = !syncRunning;
 
     const scopeSelect = $('cw-scope');
     const scopeOptions = [];
@@ -384,6 +508,12 @@
     return parts.join('') || '<div class="cw-empty">展开目录以浏览真实文件</div>';
   }
 
+  function renderUnsyncedPrompt() {
+    const selected = currentWorkspace() || {};
+    const git = selected.git || {};
+    return `<div class="cw-empty cw-empty-error">远程工作区尚未同步<div class="cw-empty-sub">来源：${esc(git.url || '')}<br>检出目录：${esc(selected.path || '')}<br>点上方「同步远程仓库」，或在服务器执行<br><code>python3 -m app --sync ${esc(selected.id || '')}</code></div><div class="cw-empty-sub">同步只做 clone / fetch / checkout，不会 reset --hard，也不会覆盖缓存里已有的本地修改。</div></div>`;
+  }
+
   function renderList() {
     root.querySelectorAll('[data-nav]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.nav === state.tab)));
     $('cw-change-count').textContent = state.dataMode === 'demo' ? Object.keys(state.edits).length : '—';
@@ -418,6 +548,13 @@
       }
       if (!list.length) html = '<div class="cw-empty">暂无修改</div>';
       $('cw-list').innerHTML = html;
+      return;
+    }
+
+    if (remoteWorkspaceNeedsSync()) {
+      $('cw-list-title').textContent = '远程工作区待同步';
+      $('cw-count').textContent = '';
+      $('cw-list').innerHTML = renderUnsyncedPrompt();
       return;
     }
 
@@ -482,8 +619,13 @@
       diff.setAttribute('aria-pressed', 'false');
       edit.textContent = '编辑（P1 未开放）';
       const file = state.file;
-      $('cw-filename').textContent = file ? baseName(file.path) : '（未打开文件）';
-      if (!file) {
+      const unsynced = remoteWorkspaceNeedsSync();
+      $('cw-filename').textContent = unsynced ? '（远程工作区未同步）' : (file ? baseName(file.path) : '（未打开文件）');
+      if (unsynced) {
+        const selected = currentWorkspace() || {};
+        $('cw-path').textContent = `远程只读 · ${(selected.git || {}).url || ''}`;
+        $('cw-view').innerHTML = '<div class="cw-code">' + renderUnsyncedPrompt() + '</div>';
+      } else if (!file) {
         $('cw-path').textContent = state.connection === 'ready' ? `真实模式 · 工作区 ${state.workspace} · 从左侧选择文件` : '真实模式 · 后端未连接';
         $('cw-view').innerHTML = `<div class="cw-code"><div class="cw-empty">${state.connection === 'ready' ? '在左侧「文件」中浏览真实目录，或用搜索定位文件。' : '未连接后端，真实模式不显示示例数据。'}</div></div>`;
       } else {
@@ -639,6 +781,8 @@
         case 'cw-use-demo': useDemoMode(); return;
         case 'cw-use-real': useRealMode(); return;
         case 'cw-connect': state.apiBase = api.normalizeBase($('cw-serverurl').value); state.workspace = ''; connectServer(); return;
+        case 'cw-sync': startSync(); return;
+        case 'cw-sync-cancel': cancelSync(); return;
         case 'cw-search-go': runSearch(); return;
         case 'cw-search-cancel': cancelRunningSearch(false); renderList(); return;
         case 'cw-back': goBack(); return;
@@ -676,7 +820,23 @@
 
   root.addEventListener('change', event => {
     const target = event.target;
-    if (target.id === 'cw-workspace') { state.workspace = target.value; state.file = null; state.tree = {byPath: {}, expanded: {}}; state.search = null; setStatus('已切换工作区：' + target.value); render(); return; }
+    if (target.id === 'cw-workspace') {
+      state.workspace = target.value;
+      state.file = null;
+      state.scope = '';
+      state.tree = {byPath: {}, expanded: {}};
+      state.search = null;
+      state.notice = '';
+      const selected = currentWorkspace();
+      setStatus(`已切换工作区：${target.value}${selected && selected.remote ? '（远程只读' + (selected.exists ? '' : ' · 未同步') + '）' : ''}`);
+      render();
+      if (selected && selected.remote && !selected.exists) {
+        setNotice(`工作区 ${selected.id} 尚未同步，点「同步远程仓库」或让服务器执行 python3 -m app --sync ${selected.id}`);
+      } else if (state.tab === 'files') {
+        loadTree('');
+      }
+      return;
+    }
     if (target.id === 'cw-scope') { state.scope = target.value; return; }
     if (target.id === 'cw-opt-regex') { state.options.regex = target.checked; return; }
     if (target.id === 'cw-opt-case') { state.options.caseSensitive = target.checked; return; }

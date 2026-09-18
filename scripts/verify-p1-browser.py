@@ -196,6 +196,42 @@ async def run_checks(cdp: CDP, base: str) -> None:
     edit_notice = await cdp.evaluate("document.getElementById('cw-banner').textContent")
     check("真实模式编辑入口说明未开放", "P4" in edit_notice, edit_notice[:80])
 
+    # 远程只读工作区：标记、未同步提示、同步与取消
+    options = await cdp.evaluate("Array.from(document.querySelectorAll('#cw-workspace option')).map(o=>o.textContent)")
+    check("工作区列表标出远程只读项", any("远程" in text for text in (options or [])), str(options)[:140])
+    selected = await cdp.evaluate(
+        "(()=>{const sel=document.getElementById('cw-workspace');"
+        "const opt=[...sel.options].find(o=>o.textContent.includes('远程'));"
+        "if(!opt) return null; sel.value=opt.value; sel.dispatchEvent(new Event('change',{bubbles:true})); return opt.value;})()"
+    )
+    check("可以选中远程工作区", selected is not None, str(selected))
+    if selected and await cdp.wait_for("document.getElementById('cw-sync').hidden === false", "显示同步按钮"):
+        listed = await cdp.evaluate("document.getElementById('cw-list').textContent.replace(/\\s+/g,' ')")
+        check(
+            "未同步的远程工作区给出明确操作提示",
+            "尚未同步" in listed and "--sync" in listed,
+            listed[:120],
+        )
+        await cdp.evaluate("document.querySelector('[data-nav=files]').click(); true")
+        await cdp.wait_for("document.getElementById('cw-list').textContent.includes('尚未同步')", "文件页同样提示未同步")
+        await cdp.evaluate(CLICK_BY_ID % "'cw-sync'")
+        if await cdp.wait_for("document.getElementById('cw-sync-cancel').hidden === false", "同步开始并显示取消按钮", timeout=30):
+            banner = await cdp.evaluate("document.getElementById('cw-banner').textContent")
+            check("同步过程有可见状态", "同步" in banner, banner[:140])
+            check(
+                "同步是服务器端 git 操作，不是前端模拟",
+                "clone" in banner or "fetch" in banner or "准备中" in banner,
+                banner[:140],
+            )
+            await cdp.evaluate(CLICK_BY_ID % "'cw-sync-cancel'")
+            check(
+                "同步可以由界面取消",
+                await cdp.wait_for(
+                    "document.getElementById('cw-sync-cancel').hidden === true", "同步已取消并恢复", timeout=60
+                ),
+                "",
+            )
+
     errors = await cdp.evaluate("JSON.stringify(window.__aswErrors||[])")
     check("页面无未捕获 JS 异常", errors in ("[]", None), str(errors))
 

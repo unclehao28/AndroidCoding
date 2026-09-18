@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
-from .config import API_VERSION, VERSION, AppConfig
+from .config import API_VERSION, VERSION, AppConfig, RootConfig
 from .errors import (
     ApiError,
     invalid_request,
@@ -27,6 +27,7 @@ from .errors import (
     not_found,
     unknown_workspace,
 )
+from .gitremote import SyncManager, git_binary, git_version, read_state as read_git_state
 from .pathtools import (
     decode_source,
     detect_eol,
@@ -80,21 +81,80 @@ class NavigationBody(CamelModel):
     position: Optional[Dict[str, Any]] = None
 
 
-def _require_root(config: AppConfig, workspace: str):
+class SyncBody(CamelModel):
+    workspace: str
+
+
+# 远程工作区"是否可用"需要问 git（目录存在不代表 clone 完整：中断的 clone 只留下 .git）。
+# 结果缓存几秒，避免每次读文件都起一串 git 子进程。
+_CHECKOUT_VALIDITY: Dict[str, tuple[float, bool]] = {}
+CHECKOUT_CACHE_SECONDS = 5.0
+
+
+def _remote_checkout_ready(root: RootConfig) -> bool:
+    import time
+
+    key = str(root.path)
+    now = time.time()
+    cached = _CHECKOUT_VALIDITY.get(key)
+    if cached and now - cached[0] < CHECKOUT_CACHE_SECONDS:
+        return cached[1]
+    state = read_git_state(root.path)
+    ready = bool(state.get("isRepo")) and state.get("head") is not None
+    _CHECKOUT_VALIDITY[key] = (now, ready)
+    return ready
+
+
+def _require_root(config: AppConfig, workspace: str) -> RootConfig:
     root = config.root(workspace)
     if root is None:
         raise unknown_workspace(workspace)
+    if root.is_remote:
+        if _remote_checkout_ready(root):
+            return root
+        raise ApiError(
+            409,
+            "workspace_not_synced",
+            f"远程工作区 {root.id} 尚未同步到本地缓存：{root.path}",
+            {
+                "workspaceId": root.id,
+                "url": root.git.url if root.git else None,
+                "checkout": str(root.path),
+                "hint": "在服务器执行 python3 -m app --sync %s，或点界面上的「同步」按钮" % root.id,
+            },
+        )
     if not root.path.is_dir():
         raise not_found("工作区根目录当前不可用", workspace=workspace, path=str(root.path))
     return root
+
+
+def _workspace_payload(root: RootConfig) -> Dict[str, Any]:
+    payload = root.to_public()
+    if root.is_remote:
+        state = read_git_state(
+            root.path,
+            url=root.git.url if root.git else None,
+            ref=root.git.ref if root.git else None,
+        )
+        payload["sync"] = state
+        # 远程工作区"可用"的判定不能只看目录是否存在：被中断的 clone 会留下只有 .git、
+        # 没有 HEAD 的半成品，这种情况必须当成未同步，让界面提示重新同步。
+        payload["exists"] = bool(state.get("isRepo")) and state.get("head") is not None
+        payload["partial"] = bool(state.get("isRepo")) and state.get("head") is None
+    return payload
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def create_app(config: AppConfig, search_manager: Optional[SearchManager] = None) -> FastAPI:
+def create_app(
+    config: AppConfig,
+    search_manager: Optional[SearchManager] = None,
+    sync_manager: Optional[SyncManager] = None,
+) -> FastAPI:
     manager = search_manager or SearchManager(config)
+    syncs = sync_manager or SyncManager(config)
     app = FastAPI(
         title="安卓源码工作台后端",
         version=VERSION,
@@ -110,6 +170,7 @@ def create_app(config: AppConfig, search_manager: Optional[SearchManager] = None
     )
     app.state.config = config
     app.state.search_manager = manager
+    app.state.sync_manager = syncs
 
     @app.exception_handler(ApiError)
     async def api_error_handler(_request: Request, exc: ApiError) -> JSONResponse:
@@ -127,6 +188,14 @@ def create_app(config: AppConfig, search_manager: Optional[SearchManager] = None
             "search": manager.engine_info(),
             "activeSearches": manager.active_request_ids,
             "features": {"write": config.features.write, "navigation": config.features.navigation},
+            "git": {
+                "available": git_binary() is not None,
+                "version": git_version(),
+                "remoteRoots": [root.id for root in config.remote_roots],
+                "cacheDir": str(config.cache_dir) if config.cache_dir else None,
+                "note": "远程仓库为只读：只做 clone/fetch/merge --ff-only，不 reset --hard，不自动提交或推送",
+            },
+            "sync": syncs.snapshot(),
             "capabilities": {
                 "write": False,
                 "navigation": False,
@@ -138,8 +207,42 @@ def create_app(config: AppConfig, search_manager: Optional[SearchManager] = None
 
     @app.get("/api/workspaces")
     async def workspaces() -> Dict[str, Any]:
-        items = [root.to_public() for root in config.roots]
-        return {"workspaces": items, "count": len(items)}
+        items = [_workspace_payload(root) for root in config.roots]
+        return {
+            "workspaces": items,
+            "count": len(items),
+            "cacheDir": str(config.cache_dir) if config.cache_dir else None,
+            "sync": syncs.snapshot(),
+        }
+
+    @app.post("/api/workspace/sync")
+    async def start_sync(body: SyncBody) -> Dict[str, Any]:
+        root = config.root(body.workspace)
+        if root is None:
+            raise unknown_workspace(body.workspace)
+        if not root.is_remote:
+            raise invalid_request(
+                f"工作区 {root.id} 是本地目录，不需要同步",
+                workspaceId=root.id,
+                hint="只有配置了 git.url 的远程仓库才需要同步",
+            )
+        if git_binary() is None:
+            raise ApiError(503, "git_unavailable", "服务器上没有 git，无法同步远程仓库")
+        started, message = syncs.start(root)
+        return {"started": started, "workspaceId": root.id, "message": message, "sync": syncs.snapshot()}
+
+    @app.get("/api/workspace/sync")
+    async def sync_status() -> Dict[str, Any]:
+        snapshot = syncs.snapshot()
+        if not snapshot["running"]:
+            # 同步结束后状态可能已经变化（例如刚 clone 出有效 HEAD），清掉缓存让它重新判断
+            _CHECKOUT_VALIDITY.clear()
+        return snapshot
+
+    @app.post("/api/workspace/sync/cancel")
+    async def cancel_sync() -> Dict[str, Any]:
+        cancelled = syncs.cancel()
+        return {"cancelled": cancelled, "sync": syncs.snapshot()}
 
     @app.get("/api/config")
     async def public_config() -> Dict[str, Any]:

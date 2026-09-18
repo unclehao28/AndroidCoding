@@ -111,3 +111,6 @@ body{padding:16px}
 #android-workbench .cw-status[data-kind=warn]{color:var(--cw-orange)}
 #android-workbench .cw-status[data-kind=error]{color:light-dark(#a04141,#f1aaaa)}
 #android-workbench .cw-scope select{background:transparent;border:0;color:var(--cw-blue);font-size:12px;max-width:280px}
+#android-workbench code{font:11px/1.6 Consolas,monospace;background:var(--cw-select);color:var(--cw-blue);padding:1px 4px;border-radius:3px;overflow-wrap:anywhere}
+#android-workbench #cw-sync{font-size:11px;min-height:28px;padding:3px 9px;border:1px solid var(--cw-border);color:var(--cw-blue)}
+#android-workbench #cw-sync-cancel{font-size:11px;min-height:28px;padding:3px 9px;border:1px solid var(--cw-border);color:var(--cw-orange)}

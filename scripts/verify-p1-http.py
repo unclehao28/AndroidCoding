@@ -54,6 +54,7 @@ def main() -> int:
     parser.add_argument("--base", default="http://127.0.0.1:8787")
     parser.add_argument("--workspace", default="demo")
     parser.add_argument("--path", default=JAVA_PATH)
+    parser.add_argument("--remote-workspace", default="aosp-system-core", help="示例配置里的远程只读工作区 id")
     args = parser.parse_args()
     base = args.base
 
@@ -71,6 +72,42 @@ def main() -> int:
     status, workspaces = request(base, "GET", "/api/workspaces")
     ids = [item["id"] for item in workspaces.get("workspaces", [])]
     check("列出配置的工作区", status == 200 and args.workspace in ids, f"{ids}")
+
+    status, health_git = request(base, "GET", "/api/health")
+    git_info = health_git.get("git", {})
+    check(
+        "报告 git 能力与远程工作区",
+        status == 200 and git_info.get("available") is True and args.remote_workspace in (git_info.get("remoteRoots") or []),
+        f"git={git_info.get('version')} remoteRoots={git_info.get('remoteRoots')}",
+    )
+
+    status, remote_tree = request(base, "GET", "/api/tree", {"workspace": args.remote_workspace, "path": ""})
+    check(
+        "未同步的远程工作区返回明确的 409 而不是普通 404",
+        status == 409 and remote_tree.get("error", {}).get("code") == "workspace_not_synced",
+        f"HTTP {status} code={remote_tree.get('error', {}).get('code')}",
+    )
+
+    status, remote_sync_state = request(base, "GET", "/api/workspaces")
+    remote_item = next(
+        (item for item in remote_sync_state.get("workspaces", []) if item["id"] == args.remote_workspace), None
+    )
+    check(
+        "工作区列表暴露远程来源与本地缓存状态",
+        status == 200 and remote_item is not None and remote_item["remote"] is True
+        and remote_item["git"]["url"] and remote_item["sync"]["isRepo"] in (True, False),
+        f"url={remote_item['git']['url'] if remote_item else None} checkout={remote_item['path'] if remote_item else None}",
+    )
+
+    status, local_sync = request(base, "POST", "/api/workspace/sync", body={"workspace": args.workspace})
+    check(
+        "本地目录工作区拒绝同步请求",
+        status == 400 and "不需要同步" in local_sync.get("error", {}).get("message", ""),
+        f"HTTP {status} {local_sync.get('error', {}).get('message', '')[:40]}",
+    )
+
+    status, sync_status = request(base, "GET", "/api/workspace/sync")
+    check("同步状态接口可用", status == 200 and "running" in sync_status, f"running={sync_status.get('running')}")
 
     status, tree = request(base, "GET", "/api/tree", {"workspace": args.workspace, "path": ""})
     names = [item["name"] for item in tree.get("entries", [])]

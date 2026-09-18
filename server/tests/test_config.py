@@ -12,8 +12,11 @@ from conftest import REPO_ROOT, SERVER_DIR, default_raw
 
 def test_example_config_is_valid_and_points_at_real_dirs():
     config = load_config(SERVER_DIR / "config.example.json")
-    assert {root.id for root in config.roots} == {"demo", "fixtures"}
-    assert all(root.path.is_dir() for root in config.roots)
+    assert {root.id for root in config.roots} == {"demo", "fixtures", "aosp-system-core"}
+    # 本地根目录必须已存在；远程根目录允许尚未同步
+    assert all(root.path.is_dir() for root in config.roots if not root.is_remote)
+    assert [root.id for root in config.remote_roots] == ["aosp-system-core"]
+    assert config.cache_dir is not None and config.cache_dir.is_dir()
     assert config.features.write is False
     assert config.features.navigation is False
     assert config.server.host == "127.0.0.1"
@@ -115,6 +118,41 @@ def test_search_limit_larger_than_read_limit_is_only_a_warning(tmp_path, sample_
     config = build_config(raw, source_path=tmp_path / "config.json")
     assert config.limits.max_file_bytes == 4096
     assert any("maxSearchFileBytes" in warning for warning in config.warnings)
+
+
+def test_config_supports_json_comments_without_breaking_urls(tmp_path, sample_tree):
+    path = tmp_path / "config.json"
+    path.write_text(
+        "{\n"
+        "  // 行注释\n"
+        '  "roots": [ { "id": "sample", "path": "' + str(sample_tree).replace("\\", "\\\\") + '", "readonly": true } ],\n'
+        "  /* 块注释\n"
+        "     跨多行 */\n"
+        '  "search": { "engine": "auto" },  // 行尾注释\n'
+        '  "features": { "write": false, "navigation": false },\n'
+        '  "prototypeDir": "' + str(REPO_ROOT / "prototype").replace("\\", "\\\\") + '"\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    config = load_config(path)
+    assert config.root("sample") is not None
+    assert config.search.engine == "auto"
+
+
+def test_config_comments_keep_line_numbers_accurate(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text('{\n  // 注释\n  "roots": [}\n', encoding="utf-8")
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(path)
+    message = excinfo.value.messages[0]
+    assert "config.json:3" in message, message
+
+
+def test_url_containing_double_slash_survives_comment_stripping(tmp_path):
+    from app.config import strip_json_comments
+
+    text = '{"git": {"url": "https://mirrors.example.com/aosp/x.git"}}'
+    assert strip_json_comments(text) == text
 
 
 def test_invalid_json_reports_location(tmp_path):

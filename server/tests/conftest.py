@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -124,6 +125,50 @@ def make_client(tmp_path: Path, sample_tree: Path):
         return TestClient(create_app(config))
 
     return _make
+
+
+REMOTE_MARKER = "asw_remote_marker_token_2026"
+
+
+@pytest.fixture
+def git_source_repo(tmp_path: Path) -> Path:
+    """建一个本地 bare 仓库，用 file:// 地址充当"远程仓库"，避免测试依赖外网。"""
+    import subprocess
+
+    if shutil.which("git") is None:
+        pytest.skip("服务器/本机没有 git")
+    work = tmp_path / "origin-work"
+    (work / "libcutils").mkdir(parents=True)
+    (work / "libutils").mkdir(parents=True)
+    (work / "libcutils" / "socket_utils.c").write_text(
+        f"// remote fixture\nint {REMOTE_MARKER}(int value) {{ return value; }}\n", encoding="utf-8"
+    )
+    (work / "libutils" / "other.cpp").write_text("// 不应出现在稀疏检出里\n", encoding="utf-8")
+    (work / "README.md").write_text("# remote fixture repo\n", encoding="utf-8")
+    identity = [
+        "-c",
+        "user.name=asw-test",
+        "-c",
+        "user.email=asw-test@example.invalid",
+        "-c",
+        "init.defaultBranch=main",
+    ]
+    subprocess.run(["git", *identity, "init", "-q"], cwd=work, check=True, capture_output=True)
+    subprocess.run(["git", *identity, "add", "-A"], cwd=work, check=True, capture_output=True)
+    subprocess.run(["git", *identity, "commit", "-q", "-m", "init"], cwd=work, check=True, capture_output=True)
+    bare = tmp_path / "origin.git"
+    subprocess.run(
+        ["git", "clone", "-q", "--bare", str(work), str(bare)], check=True, capture_output=True
+    )
+    return bare
+
+
+def remote_raw(root_override: dict, *, cache_dir: Path, **overrides) -> dict:
+    """构造一份含远程仓库的配置字典。"""
+    raw = default_raw(Path(root_override["path"]))
+    raw["cacheDir"] = str(cache_dir)
+    raw["roots"] = [root_override]
+    return _deep_merge(raw, overrides)
 
 
 @pytest.fixture

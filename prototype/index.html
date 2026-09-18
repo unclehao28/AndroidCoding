@@ -22,6 +22,8 @@
     </div>
     <label class="cw-minifield" id="cw-serverwrap" hidden><span>地址</span><input type="text" id="cw-serverurl" value="http://127.0.0.1:8787" aria-label="后端地址" spellcheck="false"><button type="button" class="cursor-interaction" id="cw-connect">连接</button></label>
     <label class="cw-minifield" id="cw-workwrap" hidden><span>工作区</span><select id="cw-workspace" aria-label="源码工作区"></select></label>
+    <button type="button" class="cursor-interaction" id="cw-sync" hidden title="clone / fetch 该远程仓库到服务器本地缓存（只读，不会 reset 或覆盖本地修改）">同步远程仓库</button>
+    <button type="button" class="cursor-interaction" id="cw-sync-cancel" hidden>取消同步</button>
   </div>
   <div class="cw-searchbar">
     <label class="cw-scope"><span class="cw-icontext" aria-hidden="true">▤</span><select id="cw-scope" aria-label="搜索范围"></select></label>

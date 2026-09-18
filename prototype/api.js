@@ -76,6 +76,9 @@ window.ASWApi = (() => {
     search: (base, body, options = {}) => request(base, '/api/search', {...options, method: 'POST', body}),
     cancelSearch: (base, requestId, options = {}) =>
       request(base, '/api/search/cancel', {...options, method: 'POST', body: {requestId}}),
-    navigation: (base, body, options = {}) => request(base, '/api/navigation', {...options, method: 'POST', body})
+    navigation: (base, body, options = {}) => request(base, '/api/navigation', {...options, method: 'POST', body}),
+    startSync: (base, body, options = {}) => request(base, '/api/workspace/sync', {...options, method: 'POST', body}),
+    syncStatus: (base, options = {}) => request(base, '/api/workspace/sync', options),
+    cancelSync: (base, options = {}) => request(base, '/api/workspace/sync/cancel', {...options, method: 'POST', body: {}})
   };
 })();

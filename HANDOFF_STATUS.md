@@ -1,103 +1,77 @@
 # 当前交接状态
 
-更新时间：2026-09-18。版本 `0.2.0-p1`（API `p1`）。本轮阶段：**P1（把原型接到真实目录）已完成并可从远程仓库复现**。
-上一版 0.1.0-prototype 只有前端示例；P1 增加了真实后端、真实文件读取、受限检索与部署文档。
+更新时间：2026-09-18。版本 `0.2.0-p1`。当前阶段：**P1 + 远程/内网仓库只读工作区**（本轮新增），可从远程仓库复现。
 
-## 已完成（P1 交付项 1-8）
+## 本轮新增：远程 / 内网 Git 仓库作为只读工作区
 
-- **配置**（`server/config.example.json` + `app/config.py`）：源码根、监听、文件大小/行段/检索/并发限额、排除规则；
-  未知字段、类型错误、越界、根目录不存在都会启动失败并列出全部问题，`features.write/navigation` 写 true 也拒绝启动。
-  `--check-config` 与启动日志会打印 Python 版本、实际检索引擎、是否找到 `rg`、各根目录命中的安卓源码标记。
-- **后端**（FastAPI）：`/api/health`、`/api/workspaces`、`/api/config`、`/api/tree`、`/api/file`、
-  `/api/search`、`/api/search/cancel`、`/api/navigation`。
-- **前端**：右上角「示例数据 / 真实服务器」显式分离（内置数据隔离在 `prototype/demo-data.js`）；真实模式只走 `/api`，
-  连不上显示错误，**不回退**示例数据。
-- **检索**：默认全库字面量，正则/大小写/全字为显式选项；rg 优先（argv 数组、不拼 shell），缺 rg 时用受限 Python 扫描；
-  有并发上限、超时可终止、`requestId` 可取消。
-- **路径与内容**：拒绝 `..`/盘符/UNC/NUL；`resolve()` 后必须在根内，越界符号链接 403 并标记；
-  UTF-8/BOM/UTF-16/GBK/latin-1 解码，NUL 判二进制，超限文件返回 `too_large`。
-- **未就绪状态**：点击标识符真实请求 `/api/navigation` 得到 `unavailable`（不伪造跳转）；编辑/对比在真实模式提示属于 P4；
-  引用面板注明"字面匹配不等于引用"。
-- **换目录可用**：临时目录（中文路径 + 随机文件名）实测 4/4；pytest 全部基于临时目录而非 `fixtures`。
-- **部署文档**：`docs/DEPLOY.md`（内网镜像与完全离线装依赖、ripgrep 安装、AOSP 配置建议、故障排查、验收命令）。
+背景：公司服务器账号**没有 root**（`sudo` 不可用），且希望直接看内网仓与公开 AOSP，不想手工 clone。
 
-## 在公司服务器上试用（最短路径，不需要再改代码）
+- 配置：`roots[].git = {url, ref, depth, sparsePaths}` + 顶层 `cacheDir`；`path` 是 cacheDir 内的检出目录。
+  未同步的远程根目录不再报普通 404，而是 `409 workspace_not_synced`（带操作提示）。
+  配置支持 `//` 与 `/* */` 注释（字符串里的 `https://` 不受影响，报错行列号仍准确）。
+- 同步：`python3 -m app --sync [id]`（只依赖标准库 + git，装依赖之前就能用）、`--git-status`；
+  页面也有「同步远程仓库 / 取消同步」按钮并轮询 `/api/workspace/sync` 显示进度。
+- 安全边界（代码写死）：只执行 `clone` / `fetch` / `checkout --detach` / `merge --ff-only`；
+  **不** `reset --hard`、`clean`、`rebase`，**不**自动提交或推送；缓存有本地修改时拒绝更新；
+  半成品（只有 `.git` 没有 HEAD）下次同步先清除再重来；地址经白名单校验并以 argv 数组传给 git；
+  认证只用服务器既有凭据（`~/.ssh`、credential helper、`url.insteadOf`），SSH 用 `BatchMode` 快速失败，不卡交互输入。
+- 公开仓实测（2026-09-18，中国大陆网络）：清华 TUNA `mirrors.tuna.tsinghua.edu.cn/git/AOSP/...` 可 `ls-remote`（clone 会排队）；
+  GitHub `aosp-mirror` 可 `ls-remote`；`android.googlesource.com` 连接超时（21s），不要依赖它。
 
-**公司服务器实况（2026-09-18 实测）**：`test-car-znh-compile`，Ubuntu + **Python 3.8.10**，**没有 pip**，**没有 rg**，
-home 实际落在 `/data/home/xuhao`。因此必须走 `requirements-py38.txt` 这条路（已在本轮补齐）。
+## 无 root 部署路径（服务器：Ubuntu + Python 3.8.10，无 pip、无 rg）
 
 ```bash
 cd ~/android-source-workbench && git pull
-sudo apt-get install -y python3-pip        # 无 sudo 时用：curl -sS https://bootstrap.pypa.io/pip/3.8/get-pip.py -o /tmp/get-pip.py && python3 /tmp/get-pip.py --user
-cd server
-python3 -m pip install --user -r requirements-py38.txt   # Python 3.8/3.9 专用清单
-sudo apt-get install -y ripgrep            # 无 sudo 时用 DEPLOY.md 第 3 节的静态二进制
-cp config.example.json config.json         # 只改 roots，指向真实源码根
-python3 -m app --config config.json --check-config       # 环境自查：引擎、rg、安卓源码标记
-./run.sh                                                 # 自动按解释器版本选依赖清单，监听 127.0.0.1:8787
-# 公司电脑：ssh -L 8787:127.0.0.1:8787 xuhao@test-car-znh-compile → 浏览器打开 http://127.0.0.1:8787/
+sudo apt-get install -y python3-pip        # 无 sudo：curl -sS https://bootstrap.pypa.io/pip/3.8/get-pip.py -o /tmp/get-pip.py && python3 /tmp/get-pip.py --user
+cd server && python3 -m pip install --user -r requirements-py38.txt     # 3.8/3.9 专用清单
+mkdir -p ~/bin && curl -sSL https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz | tar xz -C /tmp && cp /tmp/ripgrep-15.2.0-x86_64-unknown-linux-musl/rg ~/bin/ && export PATH="$HOME/bin:$PATH"
+cp config.example.json config.json         # 只改 roots（本地目录 + git.url）
+python3 -m app --config config.json --check-config
+python3 -m app --config config.json --git-status        # 远程仓是否已同步
+./run.sh
+# 公司电脑：ssh -L 8787:127.0.0.1:8787 xuhao@test-car-znh-compile → http://127.0.0.1:8787/
 ```
 
-试用范围：真实目录浏览、文件/行段读取（含 sha256 版本哈希）、全库检索与取消、路径边界防护。
-语义跳转点下去会明确显示未就绪（P2），编辑保存未开放（P4），没有索引（P3）。
-
-两个硬前提（任一不满足就先解决，别急着启动）：
-
-1. **依赖清单必须与解释器匹配**：3.8/3.9 用 `requirements-py38.txt`，>= 3.10 用 `requirements.txt`。
-   3.8 上装 `requirements.txt` 会直接失败（fastapi 0.141 要求 >=3.10）。
-2. **建议装 ripgrep**：缺 `rg` 时用受限 Python 扫描，AOSP 上会因 `pythonMaxFiles` 上限提前截断（界面显示"结果已截断"）。
-
-## 验证记录（全部为真实执行）
+## 验证记录（真实执行）
 
 | 命令 | 结果 |
 |---|---|
-| GitHub 全新 clone 后复核（HEAD 06f75e4） | 52 个文件齐全；`run.sh` 为 100755 且无 CR；`--check-config` 通过；pytest 89 项 0 失败；启动后 HTTP 验收 21/21 |
-| 本轮 3.8 兼容改动后（本机 3.13） | pytest **93 项 / 0 失败 / 3 skipped**；`--check-config` 通过；HTTP 21/21；浏览器 17/17；`bash -n server/run.sh` 通过 |
-| 为 cp38 解析依赖 | `pip download --python-version 38 --platform manylinux2014_x86_64 --only-binary=:all:` 成功解析出 fastapi 0.115.14 / starlette 0.44.0 / pydantic 2.10.6 / pydantic-core 2.27.2(cp38 wheel) / uvicorn 0.33.0 |
-| **待你在服务器上执行**：`python3 -m pip install --user -r requirements-py38-dev.txt && cd ~/android-source-workbench/server && python3 -m pytest -q` | 未执行（本机只有 3.13，Docker daemon 未启动，无法本地跑 3.8）；这是 3.8 的最终确认 |
-| `cd server && python -m pytest` | **89 项：86 passed / 3 skipped / 0 failed，4.5s**（skip=符号链接用例，Windows 无创建权限） |
-| `python scripts/check-package.py` | 通过：本地资源、3 个 JS 语法、内置示例与 `fixtures/demo-files.json` 一致、12 项导航预期坐标、C++17 语法 |
-| 启动 `python -m app`（8787）+ `python scripts/verify-p1-http.py` | **21/21**：真实读文件、全库检索跨 6 种文件类型、正则、截断、路径穿越/盘符拒绝、导航 unavailable |
-| `python scripts/verify-p1-browser.py`（本机 Chromium via CDP） | **17/17**：示例→真实切换、真实检索 12 处/6 文件、打开真实文件、点击标识符得 unavailable、真实目录树、无 JS 异常 |
-| 换目录一次性脚本（临时目录 + 中文路径 + 随机文件名） | 4/4，随后已删除该脚本 |
-
-实测输出举例：`/api/file` 返回 `sha256:2051c958f0d56…`、`encoding=utf-8`、`eol=lf`、18 行；`/api/search` 12 处/6 文件、引擎 `python-bounded 1`、`indexed=false`（一次 `query=display` 同时命中 aidl/bp/cpp/java/rc/xml 六种后缀）。
-
-## 对照 docs/ACCEPTANCE.md 的 P1 九条
-
-九条均已通过：任意源码根（换目录脚本 4/4）、真实模式不读内置 `files`、分层目录 + 行段读取（每次最多 800 行）、
-检索覆盖 Java/C/C++/AIDL/XML/Android.bp/rc、默认全库不选岗位、取消后 `activeSearches` 归零、
-空结果/超时/截断/编码不支持均有可见状态（P1 无索引，界面直说"索引：未建立（P3）"）、
-越界路径 400 与越界符号链接 403、默认只监听 127.0.0.1 并给出 SSH 转发命令。
-例外：符号链接越界用例在 Windows 上被跳过，需在 Linux（服务器）上复跑 `pytest` 才算覆盖。
+| `cd server && python -m pytest` | **121 项：118 passed / 3 skipped / 0 failed，约 14s**（skip=Windows 无法创建符号链接） |
+| 远程仓库测试（本地 `file://` 裸仓库，不依赖外网） | 真实 clone、稀疏检出、新增提交后 `fetch + checkout --detach` 更新、脏缓存拒绝覆盖、中断半成品清理、超时/取消、路径越界拒绝、API 端到端（同步→列目录→读文件→检索）全部通过 |
+| 启动服务 + `python scripts/verify-p1-http.py` | **26/26**（含 git 能力、远程工作区 409、本地工作区拒绝同步、同步状态接口） |
+| `python scripts/verify-p1-browser.py`（本机 Chromium via CDP） | **23/23**（含远程工作区标记、未同步提示、点同步触发服务器端 git、同步可取消、无 JS 异常） |
+| `python scripts/check-package.py` / `node --check` | 通过 |
+| 未完成 | 对 TUNA / 内网仓的真实 clone 未跑完（TUNA 排队 `Waiting in queue`），需在服务器上 `--sync` 实测；clangd/JDT LS 未接入 |
 
 ## 未完成（禁止对外宣称已实现）
 
-- 语义跳转（变量/参数/成员/全局/常量、声明与定义、引用）——P2；clangd/JDT LS 均未接入。
-- 全库索引与增量更新、Repo/manifest 版本一致性、个人修改覆盖层——P3。
-- 真实文件写入、保存冲突检测、可靠 diff——P4；JNI / AIDL / Binder 关联分析——P5。
-- 真实 AOSP 源码上的性能与覆盖率、多用户与权限体系（首版不做企业平台）。
+- 语义跳转（变量/参数/成员/全局/常量、声明与定义、引用）——P2；clangd / JDT LS 均未接入。
+- 全库索引与增量更新、Repo/manifest 快照一致性、个人修改覆盖层——P3（用户核心诉求之一）。
+- 真实文件写入、保存冲突检测、可靠 diff、对远程仓提交/推送——P4。
+- JNI / AIDL / Binder 关联分析——P5；真实 AOSP 上的性能与覆盖率、多用户权限体系未做。
 
 ## 已知限制
 
-- `indexed=false`：每次检索都是按目录扫描，不是索引；超大 checkout 必须等 P3（优先评估 Zoekt）。
-- 本机没有 `rg`，**rg 引擎未真实执行过**（只做了 argv 构造、超时与取消分支的单元测试）；需在装好 rg 的 Linux 上复测。
-  缺 rg 时 Python 引擎在正则回溯或磁盘阻塞时无法被强制中断（超时只置位取消标志）。
-- 符号链接越界用例在本机被跳过（Windows 权限），必须在 Linux 复测。
-- 前端标识符点击依赖 Chrome/Edge 的 `caretRangeFromPoint`，未在其他浏览器验证。
-- 只读且无认证，默认只监听回环地址；不要把非回环地址暴露到公网。
-- 本机仍有一个后端进程监听 8787（日志 `%TEMP%\asw-server-*.log`）：`Get-Process python | ? {$_.CommandLine -like '*-m app*'} | Stop-Process`。
+- 远程工作区只读；`readonly: false` 会直接拒绝启动。
+- 检索仍是受限目录扫描（`indexed=false`），AOSP 规模必须等 P3；缺 `rg` 时还会被 `pythonMaxFiles` 截断。
+- 远程工作区"可用"的判定依据 git 的有效 HEAD（结果缓存 5 秒，同步结束后失效重算）：
+  被中断的 clone 留下的半成品目录会统一返回 `409 workspace_not_synced`，不会给出空目录或空结果。
+- 符号链接越界用例在 Windows 被跳过，需在 Linux 上复跑 `pytest` 才能算覆盖。
+- 前端标识符点击依赖 Chrome/Edge 的 `caretRangeFromPoint`。
+- 只读且无认证，默认只监听回环地址。
+- 本机仍有一个后端进程监听 8787：`Get-Process python | ? {$_.CommandLine -like '*-m app*'} | Stop-Process`。
 
 ## 下一步
 
-**立刻可做（不需要我改代码）**：按上面的最短路径在服务器上部署并试用 P1，把服务器上
-`python3 -m pytest -q` 的结果发回（3.8 环境的最终确认，本机只有 3.13）。
+**你在服务器上做**：`git pull` → 装 pip 与 `requirements-py38.txt` → 静态 rg → 把 `roots` 改成公司源码路径
+（内网仓用 `git@gitlab.company.com:...` 形式的 `git.url`）→ `--sync` 拉一次 → `./run.sh` → 浏览器试用。
+同时把 `python3 -m pytest -q` 的结果发回（3.8 环境的最终确认）。
 
-**然后推进 P2（语义导航，核心价值）**：
+**我这边接着做 P2（语义导航，你的核心诉求之一）**：
 
-1. `python scripts/prepare-navigation-fixtures.py`；在 Linux 上装 clangd，用 `fixtures/navigation-cpp` 跑通
-   `textDocument/definition|declaration|references`，逐条对 `navigation-cases.json` 的 12 项预期，再补 `compile_commands`。
-2. 把 `/api/navigation` 从固定 `unavailable` 改为真实调度：请求带 workspace、相对路径、文档 hash、行列与导航类型；
-   按 workspace/构建目标管理语言服务进程，控制数量与内存，不要每次点击都新起进程。
-3. 校验 UTF-16 行列转换（含中文与非 BMP 字符）；同名多结果按作用域/工程身份消歧，无法消歧返回 `ambiguous` 让用户选择。
-4. Java 侧单独记录 Soong 导入适配与失败诊断，不得声称"JDT LS 即支持 AOSP 全部"。
+1. 用 clangd 跑通 `fixtures/navigation-cpp` 的 12 条预期（局部/参数/成员/全局/常量、同名遮蔽、声明与定义区分）。
+   无 root 时 clangd 可以取：AOSP 自带 `prebuilts/clang/host/linux-x86/*/bin/clangd`，或 LLVM 官方静态包解压到 `~/bin`。
+2. `/api/navigation` 从固定 `unavailable` 改为真实调度：请求带 workspace、相对路径、文档 hash、行列、类型；
+   按 workspace 管理语言服务进程，控制数量与内存。
+3. UTF-16 行列转换（含中文与非 BMP 字符）测试；同名多结果按作用域/工程身份消歧，无法消歧返回 `ambiguous`。
+4. 之后是 P3 索引（Zoekt）——你明确提到的另一个核心诉求，需要先有真实 checkout 的规模数据。

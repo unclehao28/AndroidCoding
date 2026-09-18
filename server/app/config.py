@@ -10,7 +10,11 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
+
+from .errors import ApiError
+from .pathtools import is_within as _is_within
+from .pathtools import normalize_rel_path
 
 VERSION = "0.2.0-p1"
 API_VERSION = "p1"
@@ -43,7 +47,17 @@ LIMIT_SPECS: dict[str, tuple[float, float, float]] = {
     "maxRegexLength": (16, 4096, 200),
     "maxLineLength": (80, 10000, 400),
     "rgThreads": (1, 32, 2),
+    # 远程仓库 clone/fetch 的上限：整套 AOSP 子仓可能要几十分钟
+    "syncTimeoutSeconds": (60, 86400, 3600),
 }
+
+# 允许的 git 远程地址：https/http/ssh/git/file 协议，或 git@host:path 形式。
+# 收紧的原因：地址会作为单个 argv 元素传给 git，必须排除空白、引号、反引号等，
+# 也顺便排除以 '-' 开头的字符串（否则会被 git 当成选项）。
+GIT_URL_RE = re.compile(
+    r"^(?:(?:https?|ssh|git|file)://[^\s'\"`<>|;&$]{1,500}|[A-Za-z0-9._-]{1,64}@[A-Za-z0-9._-]{1,253}:[^\s'\"`<>|;&$]{1,500})$"
+)
+GIT_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,200}$")
 
 
 class ConfigError(Exception):
@@ -60,11 +74,40 @@ class ServerConfig:
 
 
 @dataclass(frozen=True)
+class GitSource:
+    """远程 / 内网 Git 仓库（只读工作区）的同步配置。"""
+
+    url: str
+    ref: str | None = None
+    depth: int = 1
+    sparse_paths: tuple[str, ...] = ()
+
+    @property
+    def remote(self) -> bool:
+        return True
+
+    def to_public(self) -> dict:
+        return {
+            "url": self.url,
+            "ref": self.ref,
+            "depth": self.depth,
+            "sparsePaths": list(self.sparse_paths),
+            "credentials": "使用服务器上既有的 git/SSH 凭据；工作台不保存口令或私钥",
+            "writeSupported": False,
+        }
+
+
+@dataclass(frozen=True)
 class RootConfig:
     id: str
     name: str
     path: Path
     readonly: bool
+    git: GitSource | None = None
+
+    @property
+    def is_remote(self) -> bool:
+        return self.git is not None
 
     def to_public(self) -> dict:
         return {
@@ -73,6 +116,8 @@ class RootConfig:
             "path": str(self.path),
             "readonly": self.readonly,
             "exists": self.path.is_dir(),
+            "remote": self.is_remote,
+            "git": self.git.to_public() if self.git else None,
         }
 
 
@@ -88,6 +133,7 @@ class Limits:
     max_regex_length: int
     max_line_length: int
     rg_threads: int
+    sync_timeout_seconds: float
 
     def to_public(self) -> dict:
         return {
@@ -101,6 +147,7 @@ class Limits:
             "maxRegexLength": self.max_regex_length,
             "maxLineLength": self.max_line_length,
             "rgThreads": self.rg_threads,
+            "syncTimeoutSeconds": self.sync_timeout_seconds,
         }
 
 
@@ -128,6 +175,7 @@ class AppConfig:
     search: SearchSettings
     features: Features
     prototype_dir: Path
+    cache_dir: Path | None = None
     warnings: tuple[str, ...] = ()
 
     def root(self, root_id: str) -> RootConfig | None:
@@ -136,12 +184,17 @@ class AppConfig:
                 return item
         return None
 
+    @property
+    def remote_roots(self) -> tuple[RootConfig, ...]:
+        return tuple(root for root in self.roots if root.is_remote)
+
     def to_public(self) -> dict:
         return {
             "apiVersion": API_VERSION,
             "version": VERSION,
             "server": {"host": self.server.host, "port": self.server.port},
             "roots": [root.to_public() for root in self.roots],
+            "cacheDir": str(self.cache_dir) if self.cache_dir else None,
             "limits": self.limits.to_public(),
             "search": {
                 "engine": self.search.engine,
@@ -151,6 +204,53 @@ class AppConfig:
             "features": {"write": self.features.write, "navigation": self.features.navigation},
             "warnings": list(self.warnings),
         }
+
+
+def _parse_git_source(value: Any, where: str, problems: list[str]) -> GitSource | None:
+    """校验 roots[].git。远程仓库只读，且地址会作为单个 argv 传给 git，必须严格校验。"""
+    if value is None:
+        return None
+    entry = _require_mapping(value, f"{where}.git", problems)
+    _check_unknown(entry, {"url", "ref", "depth", "sparsePaths"}, f"{where}.git", problems)
+    url = entry.get("url")
+    if not isinstance(url, str) or not GIT_URL_RE.match(url.strip()):
+        problems.append(
+            f"{where}.git.url 必须是 https/http/ssh/git/file 地址或 git@host:path 形式，"
+            "且不能包含空白、引号、反引号或 shell 元字符"
+        )
+        return None
+    url = url.strip()
+    ref = entry.get("ref")
+    if ref is not None:
+        if not isinstance(ref, str) or not GIT_REF_RE.match(ref):
+            problems.append(f"{where}.git.ref 必须是分支或标签名，匹配 {GIT_REF_RE.pattern}")
+            ref = None
+    depth = entry.get("depth", 1)
+    if isinstance(depth, bool) or not isinstance(depth, int) or not (1 <= depth <= 100000):
+        problems.append(f"{where}.git.depth 必须是 1..100000 的整数（浅克隆，1 最省时间与磁盘）")
+        depth = 1
+    sparse_raw = entry.get("sparsePaths", [])
+    sparse: list[str] = []
+    if not isinstance(sparse_raw, list):
+        problems.append(f"{where}.git.sparsePaths 必须是字符串数组")
+    else:
+        for pattern in sparse_raw:
+            if not isinstance(pattern, str):
+                problems.append(f"{where}.git.sparsePaths 含非字符串项：{pattern!r}")
+                continue
+            if pattern.startswith(("/", "\\")):
+                problems.append(f"{where}.git.sparsePaths 必须是仓库内的相对路径：{pattern!r}")
+                continue
+            try:
+                normalized = normalize_rel_path(pattern)
+            except ApiError:
+                problems.append(f"{where}.git.sparsePaths 含非法路径：{pattern!r}")
+                continue
+            if not normalized:
+                problems.append(f"{where}.git.sparsePaths 不允许空项")
+                continue
+            sparse.append(normalized)
+    return GitSource(url=url, ref=ref, depth=depth, sparse_paths=tuple(sparse))
 
 
 def _require_mapping(value: Any, where: str, problems: list[str]) -> dict:
@@ -189,7 +289,7 @@ def _str_list(value: Any, where: str, problems: list[str]) -> list[str]:
     return list(value)
 
 
-ALLOWED_TOP_LEVEL = {"server", "roots", "limits", "search", "features", "prototypeDir"}
+ALLOWED_TOP_LEVEL = {"server", "roots", "limits", "search", "features", "prototypeDir", "cacheDir"}
 
 
 def build_config(raw: dict, *, source_path: Path) -> AppConfig:
@@ -228,13 +328,38 @@ def build_config(raw: dict, *, source_path: Path) -> AppConfig:
     if "*" in cors_origins:
         warnings.append("server.corsOrigins 含 *：服务只监听回环地址，仍建议收紧为具体来源")
 
+    # cacheDir：远程仓库的本地缓存父目录。只有出现 git 根目录时才需要。
+    cache_dir: Path | None = None
+    cache_dir_raw = raw.get("cacheDir")
+    if cache_dir_raw is not None:
+        if not isinstance(cache_dir_raw, str) or not cache_dir_raw.strip():
+            problems.append("cacheDir 必须是非空字符串（远程仓库的本地缓存父目录）")
+        else:
+            cache_candidate = Path(os.path.expanduser(cache_dir_raw.strip()))
+            if not cache_candidate.is_absolute():
+                cache_candidate = base_dir / cache_candidate
+            cache_dir = cache_candidate.resolve()
+            if cache_dir == Path(cache_dir.anchor):
+                problems.append("cacheDir 不能是文件系统根目录")
+                cache_dir = None
+            elif not cache_dir.exists():
+                try:
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    warnings.append(f"cacheDir 不存在，已创建：{cache_dir}")
+                except OSError as exc:
+                    problems.append(f"cacheDir 无法创建：{cache_dir}（{exc}）")
+                    cache_dir = None
+            elif not cache_dir.is_dir():
+                problems.append(f"cacheDir 不是目录：{cache_dir}")
+                cache_dir = None
+
     seen_ids: set[str] = set()
     seen_paths: set[str] = set()
     roots: list[RootConfig] = []
     for index, item in enumerate(root_section):
         where = f"roots[{index}]"
         entry = _require_mapping(item, where, problems)
-        _check_unknown(entry, {"id", "name", "path", "readonly"}, where, problems)
+        _check_unknown(entry, {"id", "name", "path", "readonly", "git"}, where, problems)
         root_id = entry.get("id")
         if not isinstance(root_id, str) or not ROOT_ID_RE.match(root_id):
             problems.append(f"{where}.id 必须匹配 {ROOT_ID_RE.pattern}")
@@ -243,14 +368,53 @@ def build_config(raw: dict, *, source_path: Path) -> AppConfig:
             problems.append(f"{where}.id 重复：{root_id}")
             continue
         seen_ids.add(root_id)
+
+        git_source = _parse_git_source(entry.get("git"), where, problems)
+        readonly = _bool_setting(entry.get("readonly"), f"{where}.readonly", problems, True)
+        if git_source is not None and not readonly:
+            problems.append(
+                f"{where}.readonly 必须为 true：远程仓库在 P1 只有只读能力"
+                "（真实写入与提交属于 P4，且不会自动 push）"
+            )
+            readonly = True
+
         raw_path = entry.get("path")
         if not isinstance(raw_path, str) or not raw_path.strip():
             problems.append(f"{where}.path 必须是非空字符串")
             continue
         expanded = os.path.expanduser(raw_path.strip())
         candidate = Path(expanded)
-        if not candidate.is_absolute():
-            candidate = base_dir / candidate
+        if git_source is not None:
+            # 远程仓库：path 是缓存检出目录；相对路径以 cacheDir 为准，且必须落在 cacheDir 内
+            if not candidate.is_absolute():
+                if cache_dir is None:
+                    problems.append(f"{where} 是远程仓库，需要顶层配置 cacheDir 才能确定缓存位置")
+                    continue
+                candidate = cache_dir / candidate
+            resolved = candidate.resolve()
+            if cache_dir is None or not _is_within(resolved, cache_dir):
+                problems.append(f"{where}.path 必须位于 cacheDir（{cache_dir}）之内：{resolved}")
+                continue
+            if resolved.exists() and not resolved.is_dir():
+                problems.append(f"{where}.path 已存在但不是目录：{resolved}")
+                continue
+            if resolved.exists() and any(resolved.iterdir()) and not (resolved / ".git").exists():
+                problems.append(
+                    f"{where}.path 已存在且不是 git 仓库存根：{resolved}，请确认是否手工删除后重新同步"
+                )
+                continue
+            key = os.path.normcase(str(resolved))
+            if key in seen_paths:
+                problems.append(f"{where}.path 与前面的根目录重复：{resolved}")
+                continue
+            seen_paths.add(key)
+            name = entry.get("name", root_id)
+            if not isinstance(name, str) or not name.strip():
+                problems.append(f"{where}.name 必须是非空字符串")
+                name = root_id
+            roots.append(RootConfig(id=root_id, name=name.strip(), path=resolved, readonly=readonly, git=git_source))
+            continue
+
         try:
             resolved = candidate.resolve(strict=True)
         except FileNotFoundError:
@@ -340,6 +504,16 @@ def build_config(raw: dict, *, source_path: Path) -> AppConfig:
 
     if not roots:
         problems.append("没有有效的源码根目录，服务不会启动")
+    if any(root.is_remote for root in roots):
+        if cache_dir is None:
+            problems.append("有远程仓库根目录时必须配置 cacheDir（本地缓存父目录）")
+        else:
+            for local_root in (root for root in roots if not root.is_remote):
+                if _is_within(cache_dir, local_root.path) or _is_within(local_root.path, cache_dir):
+                    warnings.append(
+                        f"cacheDir {cache_dir} 与源码根 {local_root.path} 有重叠，"
+                        "远程仓库的克隆文件可能出现在检索结果里，建议分开存放"
+                    )
     if problems:
         raise ConfigError(problems)
 
@@ -354,6 +528,7 @@ def build_config(raw: dict, *, source_path: Path) -> AppConfig:
         max_regex_length=int(limit_values["maxRegexLength"]),
         max_line_length=int(limit_values["maxLineLength"]),
         rg_threads=int(limit_values["rgThreads"]),
+        sync_timeout_seconds=float(limit_values["syncTimeoutSeconds"]),
     )
     return AppConfig(
         source_path=source_path,
@@ -369,18 +544,66 @@ def build_config(raw: dict, *, source_path: Path) -> AppConfig:
         ),
         features=Features(write=write, navigation=navigation),
         prototype_dir=prototype_dir,
+        cache_dir=cache_dir,
         warnings=tuple(warnings),
     )
+
+
+def strip_json_comments(text: str) -> str:
+    """容忍配置文件里的 // 与 /* */ 注释。
+
+    注释字符会被替换成空格，保证报错时的行列号仍然准确；
+    字符串内部的内容（例如 "https://..."）不会被当成注释。
+    """
+    out: list[str] = []
+    index = 0
+    length = len(text)
+    in_string = False
+    while index < length:
+        char = text[index]
+        if in_string:
+            out.append(char)
+            if char == "\\" and index + 1 < length:
+                out.append(text[index + 1])
+                index += 2
+                continue
+            if char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            out.append(char)
+            index += 1
+            continue
+        if char == "/" and index + 1 < length and text[index + 1] == "/":
+            while index < length and text[index] != "\n":
+                out.append(" ")
+                index += 1
+            continue
+        if char == "/" and index + 1 < length and text[index + 1] == "*":
+            end = text.find("*/", index + 2)
+            stop = length if end < 0 else end + 2
+            for cursor in range(index, stop):
+                out.append("\n" if text[cursor] == "\n" else " ")
+            index = stop
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
 
 
 def load_config(path: str | os.PathLike) -> AppConfig:
     source_path = Path(path).expanduser().resolve()
     if not source_path.is_file():
         raise ConfigError([f"配置文件不存在：{source_path}"])
+    text = source_path.read_text(encoding="utf-8")
     try:
-        raw = json.loads(source_path.read_text(encoding="utf-8"))
+        raw = json.loads(strip_json_comments(text))
     except json.JSONDecodeError as exc:
-        raise ConfigError([f"配置文件不是合法 JSON：{source_path}:{exc.lineno}:{exc.colno} {exc.msg}"]) from exc
+        raise ConfigError(
+            [f"配置文件不是合法 JSON：{source_path}:{exc.lineno}:{exc.colno} {exc.msg}（支持 // 与 /* */ 注释）"]
+        ) from exc
     if not isinstance(raw, dict):
         raise ConfigError(["配置文件顶层必须是对象"])
     return build_config(raw, source_path=source_path)
