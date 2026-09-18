@@ -181,11 +181,20 @@ NFS/CIFS 挂载（源码可能不在本机磁盘上）、docker 容器的挂载�
 
 ```bash
 cd ~/android-source-workbench
+python3 scripts/setup-navigation.py --add-root /data/aosp12   # 登记只读工作区 + 找 clangd + 写配置（推荐）
 python3 scripts/setup-navigation.py                 # 探测 + 写配置
 python3 scripts/setup-navigation.py --acceptance    # 顺带跑 12 条跳转预期验收
 python3 scripts/setup-navigation.py --print-only    # 只看探测结果，不改任何文件
 python3 scripts/setup-navigation.py --depth 6       # 默认只扫 4 层，找不到源码时加深
 ```
+
+`--add-root` 会把这个目录作为**只读**工作区写进 `roots[]`（按行插入、保留注释、先备份、
+写入前用真正的校验器验证，校验不过就一个字节都不写），这样浏览/检索真实源码不需要你手改 JSON。
+给了 `--aosp` / `--add-root` 之后脚本**不会**再去扫 `/data`、`/home`——那份目录可能有几十万文件，
+扫一遍要几分钟，而你既然说出了源码位置就没必要再找。
+
+`--direct` 验收路径只依赖标准库（`app.config` / `app.navigation` / `app.lsp.*` 都不需要 fastapi），
+所以**在 pip 装好之前就能先拿到 P2 的验收结果**。
 
 配置如果是语法坏的（例如在 `vi` 里误操作留下了空文件），脚本会先备份再重建，**并在同一次运行里继续探测**，
 不需要你再跑第二遍；备份文件名带秒级时间戳且保证不互相覆盖，你原来手工写的内容不会丢。

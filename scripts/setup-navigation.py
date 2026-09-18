@@ -36,6 +36,7 @@ for _stream in (sys.stdout, sys.stderr):
 from app.config import ConfigError  # noqa: E402
 from app.navsetup import (  # noqa: E402
     DEFAULT_SEARCH_ROOTS,
+    add_source_root,
     default_search_roots,
     detect,
     find_aosp_roots,
@@ -142,6 +143,12 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", help="配置文件路径，默认 server/config.json")
     parser.add_argument("--aosp", action="append", default=[], help="手工指定 AOSP 源码根（可重复）")
+    parser.add_argument(
+        "--add-root",
+        action="append",
+        default=[],
+        help="把该目录登记成只读工作区（可重复），用于浏览/检索真实源码；不需要手工编辑 JSON",
+    )
     parser.add_argument("--clangd", help="手工指定 clangd 可执行文件")
     parser.add_argument("--depth", type=int, default=4, help="探测深度上限，默认 4")
     parser.add_argument("--print-only", action="store_true", help="只探测，不修改配置")
@@ -166,10 +173,19 @@ def main() -> int:
         return 0 if (roots and detection.clangd_path) else 2
 
     config_path = Path(args.config) if args.config else SERVER / "config.json"
+    # 先把 --add-root 指定的目录登记成工作区，再让探测把它们当作 clangd 的搜索线索
+    added = [Path(item).expanduser() for item in args.add_root]
     try:
+        for item in added:
+            report = add_source_root(config_path.parent, item, config_name=config_path.name)
+            print(f"[源码根] {report['message']}")
+            if report.get("backup"):
+                print(f"    备份：{report['backup']}")
+            for problem in report.get("problems", []):
+                print(f"    [问题] {problem}")
         result = prepare_config(
             config_path.parent,
-            aosp_roots=extra or None,
+            aosp_roots=extra + added or None,
             clangd_path=args.clangd,
             config_name=config_path.name,
             max_depth=args.depth,

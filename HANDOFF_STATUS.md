@@ -48,55 +48,49 @@ python3 scripts/setup-navigation.py --print-only  # 只探测不改文件
 
 | 命令 | 结果 |
 |---|---|
-| `cd server && python -m pytest` | **187 项：184 passed / 3 skipped / 0 failed**（skip=Windows 无法建符号链接） |
-| 环境准备脚本（`test_navsetup.py`，20 项） | AOSP 判定（`.repo` / `prebuilts/clang` 单独命中即确定、单个通用标记不算、跳过 node_modules、深度上限）、clangd 探测与来源、按行改写保留注释、**语法损坏时备份并重建后继续跑完探测**、**路径不存在时绝不覆盖配置**、两次备份不互相覆盖、候选目录诊断 |
+| `cd server && python -m pytest` | **193 项：190 passed / 3 skipped / 0 failed**（skip=Windows 无法建符号链接） |
+| 环境准备脚本（`test_navsetup.py`，26 项） | AOSP 判定（`.repo` / `prebuilts/clang` 单独命中即确定、单个通用标记不算、跳过 node_modules、深度上限）、clangd 探测与来源、按行改写保留注释、**语法损坏时备份并重建后继续跑完探测**、**路径不存在时绝不覆盖配置**、两次备份不互相覆盖、候选目录诊断、`--add-root` 插入位置/id 去重/重复路径幂等/校验不过则不写、**给了源码根就不再扫 /data /home** |
+| `--add-root` 端到端（镜像 + 伪造 AOSP12） | 登记只读根 → 只扫 1 个目录（不再全盘扫）→ 找到自带 clangd → 写 `searchDirs`（注释保留、两次备份都留住）→ 退出码 0 |
 | 镜像环境端到端（临时目录模拟"服务器仓库 + 一份 AOSP"） | 空配置文件 → 一次运行内完成：备份 + 重建 + 扫 2974 个目录找到 AOSP + 找到自带 clangd + 按行写入 `searchDirs`（注释保留）→ 输出验收命令；无源码时打印候选与 `find` 命令、且不硬跑验收 |
 | LSP/导航测试（独立进程 mock LSP） | 36 项：分帧、握手、服务端请求应答、单请求超时不影响进程、进程崩溃带 stderr；resolved/ambiguous/references 不判歧义/空结果/stale/位置越界/Java 未接入/实例复用/中文路径/emoji 列号/工作区外目标标记 |
 | 启动服务 + `scripts/verify-p1-http.py` | **26/26**（含 Java 明确未接入、坐标基准、能力矩阵如实上报） |
 | `scripts/verify-p1-browser.py`（本机 Chromium） | **24/24**：真实点击标识符 → 真实 `/api/navigation` → 显示"未就绪 + 真实原因"，无 JS 异常 |
 | `scripts/verify-p2-navigation.py --direct`（本机） | 退出码 **2**：本机没有 clangd，脚本如实报告 FAIL，**没有**把跑不了算成通过 |
-| `scripts/find-source-server.sh`（伪造 AOSP + manifest） | 三类证据全部提取成功：manifest 的 `fetch=`、`.repo/manifests` 的 `remote.origin.url`、历史里的 `repo init -u`；两个 shell 脚本 `bash -n` 通过 |
+| `scripts/find-source-server.sh`（伪造 AOSP + manifest） | 三类证据全部提取成功，两个 shell 脚本 `bash -n` 通过 |
 
 ## 未完成（禁止对外宣称已实现）
 
-- **真机 clangd 的 12 条预期尚未跑过**（本机没有 clangd；LLVM Windows 包 467–860MB，没有下载）。
-  需要你在服务器上执行：`python3 scripts/verify-p2-navigation.py --direct --workspace fixtures`。
-- Java（JDT LS + Soong/classpath 适配）、Kotlin、Rust、AIDL 的语义能力：未接入（`/api/health` 的
-  `navigation.notImplemented` 会如实列出）。
-- AOSP 真实工程的 `compile_commands.json`、`--query-driver` 等工具链适配未做。
-- 全库索引（P3）、写入与提交（P4）、JNI/Binder 关联（P5）均未开始。
+- **真机 clangd 的 12 条预期尚未跑过**（本机没有 clangd）：`python3 scripts/verify-p2-navigation.py --direct`。
+- Java（JDT LS + Soong/classpath）、Kotlin、Rust、AIDL 未接入；AOSP 的 `compile_commands.json`、
+  `--query-driver` 等工具链适配未做；全库索引（P3）、写入（P4）、JNI/Binder 关联（P5）未开始。
 
 ## 已知限制
 
-- 默认不开 `backgroundIndex`：跨编译单元的定义跳转可能为空（头文件内的声明与同 TU 内没问题）；
-  开启后资源开销很大，整套 AOSP 请谨慎。共享/远程索引属于后续工作。
-- clangd 首次请求需要加载编译参数，可能接近 `requestTimeoutSeconds`；超时只影响本次请求，不杀进程。
-- `position` 的单位是 UTF-16 列；检索结果的 `column` 是 code point（两者都已在文档与响应里标注）。
-- 实例上限默认 2、空闲 300 秒关闭；`/api/health` 的 `navigation.manager.instances` 可看到当前进程与请求数。
+- 默认不开 `backgroundIndex`：跨编译单元的定义跳转可能为空（头文件内与同 TU 没问题）；整套 AOSP 打开很吃资源。
+- clangd 首次请求要加载编译参数，可能接近 `requestTimeoutSeconds`；超时只影响本次请求，不杀进程。
+- `position` 是 UTF-16 列，检索结果的 `column` 是 code point；实例上限 2、空闲 300 秒关闭。
 - 只有只读能力、无认证，默认只监听回环地址。
 
 ## 公司侧环境现状（2026-09-18 实测）
 
-- `test-car-znh-compile`：Ubuntu + Python 3.8.10、**无 pip、无 rg、没有 AOSP 源码**（已用它跑过探测）。
-- 内网有 OpenGrok 1.14.13（Tomcat 10.1.55）在 `http://172.20.36.99:8081/source/`，索引的是 AOSP12。
-  OpenGrok 是浏览/检索服务，**不能 `git clone`**。
-- git/repo 服务器地址待确认。查法：`bash scripts/find-source-server.sh`（读 checkout 里的
-  `.repo/manifest.xml` 的 `fetch=`、`.repo/manifests` 的 `remote.origin.url`、shell 历史里的 `repo init -u`）。
-  本机用伪造的 AOSP 验证过三类证据都能提取。
-- 三条可行路径，按优先级：**A** 把工作台部署到源码所在机器（`roots` 直接指向源码根，能力最全）→
-  **C** 用 `roots[].git` 只读浅克隆（P1 已支持，注意 AOSP 体积与 sparsePaths）→
-  **B** 若只能访问 OpenGrok，则新增一个 `opengrok` 后端（用它的 raw 文件接口取内容、搜索接口做检索），
-  需要先实测接口再实现，不能在没验证的情况下宣称可用。
+- `test-car-znh-compile`：Ubuntu + Python 3.8.10、**无 pip、无 rg**；但**本机就有十几份完整 AOSP12 源码树**
+  在同事的 home 下（`/home/*/aosp12`、`/data/home/*/aosp12`、`/home/jenkins/jobs/droid-12`……，
+  `/home` 与 `/data/home` 指向同一批目录）。OpenGrok 索引的正是 `/data/home/yangyang/aosp12`。
+  用 `python3 scripts/setup-navigation.py --add-root /data/home/yangyang/aosp12` 直接登记为只读工作区即可，
+  **不需要 clone**。（读的是同事的目录，已确认可遍历；工作台只读、clangd 用 `--background-index=0`，
+  不会往源码树里写东西。要不要长期读别人的 home，请自行和团队确认。）
+- 内网 OpenGrok 1.14.13 在 `http://172.20.36.99:8081/source/`（索引 AOSP12）；OpenGrok 是浏览/检索服务，
+  **不能 `git clone`**，其 API 返回 401（需要凭据），暂不作为数据源。
+- git/repo 服务器地址仍待确认：`bash scripts/find-source-server.sh` 会读 `.repo/manifest.xml` 的 `fetch=` 等证据。
 
 ## 下一步
 
-1. **你**：先确认源码在哪台机器、git 地址是什么：
+1. **你**：登记现成源码树并跑验收（不需要 clone、也不需要先装 pip）：
 
    ```bash
    cd ~/android-source-workbench && git pull
-   bash scripts/find-source-server.sh                    # 没有 checkout 时会说"没找到"
-   bash scripts/find-source-server.sh --probe-host 172.20.36.99   # 看是否有 Gerrit(29418)/git(9418)
-   python3 scripts/setup-navigation.py --acceptance      # 找 AOSP/clangd、写配置、跑 12 条预期
+   python3 scripts/setup-navigation.py --add-root /data/home/yangyang/aosp12
+   python3 scripts/verify-p2-navigation.py --direct --workspace fixtures
    ```
 
    把输出发我。然后在页面上点几个真实 `frameworks/base` 的 C++ 符号，告诉我哪些跳得准、哪些为空。

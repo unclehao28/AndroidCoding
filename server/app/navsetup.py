@@ -234,7 +234,10 @@ def detect(
         roots.append(Path(os.path.expanduser(aosp_hint)))
 
     if scan:
-        scanned_roots, scanned_count = find_aosp_roots(roots + default_search_roots(), max_depth=max_depth)
+        # 已经明确给了源码根就只扫这些目录：在 /data /home 下按层扫可能要好几分钟，
+        # 而用户既然能说出源码在哪，就没有必要再去找一遍。
+        search = roots + ([] if roots else default_search_roots())
+        scanned_roots, scanned_count = find_aosp_roots(search, max_depth=max_depth)
         result.aosp_roots = scanned_roots
         result.scanned_dirs = scanned_count
         if not scanned_roots and not roots:
@@ -264,6 +267,143 @@ def detect(
     if not path:
         result.notes.append("没有找到 clangd：AOSP 自带 prebuilts/clang/host/linux-x86/*/bin/clangd，可直接复用")
     return result
+
+
+ROOTS_KEY_LINE = re.compile(r'^(\s*)"roots"\s*:\s*\[')
+
+
+def build_root_entry(path, *, root_id: str | None = None, name: str | None = None, readonly: bool = True) -> dict:
+    """构造一个 roots[] 条目。id 只能由字母数字和 -_. 组成，用于 URL 参数。"""
+    target = Path(os.path.expanduser(str(path)))
+    label = target.name or "root"
+    clean_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", label).strip("-").lower() or "root"
+    return {
+        "id": root_id or clean_id,
+        "name": name or label,
+        "path": str(target),
+        "readonly": readonly,
+    }
+
+
+def unique_root_id(entry: dict, existing) -> dict:
+    """id 撞车时补 -2、-3……（id 会出现在 URL 参数里，不能重复）"""
+    used = {item.get("id") for item in existing if isinstance(item, dict)}
+    if entry["id"] not in used:
+        return entry
+    base_id = entry["id"]
+    suffix = 2
+    while f"{base_id}-{suffix}" in used:
+        suffix += 1
+    return dict(entry, id=f"{base_id}-{suffix}")
+
+
+def add_root_to_text(text: str, entry: dict) -> tuple:
+    """把新条目插进 roots[]，尽量保留注释。返回 (新文本, 是否改动, 说明, 实际使用的条目)。
+
+    找不到可插入的位置时返回未改动（第三个值为空串），由调用方退回整体重写。
+    """
+    raw = json.loads(strip_json_comments(text))
+    existing = [item for item in (raw.get("roots") or []) if isinstance(item, dict)]
+    target = os.path.normcase(str(Path(entry["path"]).expanduser()))
+    for item in existing:
+        if os.path.normcase(str(item.get("path", ""))) == target:
+            return text, False, f"roots 里已经有这个路径，未重复添加：{entry['path']}", entry
+    entry = unique_root_id(entry, existing)
+
+    lines = text.splitlines(keepends=True)
+    header_index = None
+    indent = ""
+    for index, line in enumerate(lines):
+        match = ROOTS_KEY_LINE.match(line.rstrip("\r\n"))
+        if match:
+            header_index = index
+            indent = match.group(1)
+            break
+    if header_index is None:
+        return text, False, "", entry
+    # 数组闭合行与键同缩进（可能是 "]" 或 "],"）；靠缩进区分 sparsePaths 这类内层数组
+    close_pattern = re.compile(r"^" + re.escape(indent) + r"\]\s*,?\s*$")
+    close_index = None
+    for index in range(header_index + 1, len(lines)):
+        if close_pattern.match(lines[index].rstrip("\r\n")):
+            close_index = index
+            break
+    if close_index is None:
+        return text, False, "", entry
+    last_content = None
+    for index in range(close_index - 1, header_index, -1):
+        stripped = lines[index].strip()
+        if stripped and not stripped.startswith("//"):
+            last_content = index
+            break
+    if last_content is None:
+        return text, False, "", entry  # 空数组，交给整体重写
+
+    newline = "\r\n" if lines[last_content].endswith("\r\n") else "\n"
+    tail = lines[last_content].rstrip("\r\n")
+    if not tail.rstrip().endswith(","):
+        lines[last_content] = tail.rstrip() + "," + newline
+    body = json.dumps(entry, ensure_ascii=False)
+    lines.insert(close_index, indent + "  " + body + newline)
+    return "".join(lines), True, f"已登记源码根：{entry['path']}（id={entry['id']}，readonly=true）", entry
+
+
+def add_source_root(
+    server_dir: Path,
+    root_path,
+    *,
+    config_name: str = "config.json",
+    root_id: str | None = None,
+    name: str | None = None,
+) -> dict:
+    """把一个源码目录登记为只读 root。
+
+    先写到临时文件并用真正的配置校验器验证，通过后才替换并备份原文件——
+    绝不把一个校验不过的配置留在原地。
+    """
+    target, created = ensure_config_file(server_dir, config_name)
+    entry = build_root_entry(root_path, root_id=root_id, name=name)
+    original = target.read_text(encoding="utf-8")
+    updated, changed, message, entry = add_root_to_text(original, entry)
+    strategy = "按行插入（保留注释）"
+    if not changed and not message:
+        updated = _rewrite_as_json(original, add_root=entry)
+        changed = True
+        strategy = "整体重写（注释会丢失，已备份原文件）"
+    if not changed:
+        return {"changed": False, "strategy": strategy, "message": message, "backup": None,
+                "configPath": str(target), "entry": entry, "problems": []}
+
+    temp = target.with_name(target.name + ".tmp-check")
+    temp.write_text(updated, encoding="utf-8")
+    try:
+        load_config(temp)
+        problems: list = []
+    except ConfigError as exc:
+        problems = list(exc.messages)
+    finally:
+        temp.unlink(missing_ok=True)
+    if problems:
+        return {"changed": False, "strategy": strategy, "message": f"未写入，配置校验不通过：{message}",
+                "backup": None, "configPath": str(target), "entry": entry, "problems": problems}
+
+    backup = backup_path(target)
+    backup.write_text(original, encoding="utf-8")
+    target.write_text(updated, encoding="utf-8")
+    return {"changed": True, "strategy": strategy, "message": message, "backup": str(backup),
+            "configPath": str(target), "entry": entry, "problems": [], "created": created}
+
+
+def ensure_config_file(server_dir: Path, config_name: str = "config.json") -> tuple:
+    """确保配置文件存在（不存在时从示例复制），返回 (路径, 是否新建)。"""
+    example = server_dir / "config.example.json"
+    target = server_dir / config_name
+    if target.exists():
+        return target, False
+    if not example.is_file():
+        raise ConfigError([f"缺少 {example.name}，无法生成 {config_name}"])
+    target.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+    return target, True
 
 
 def _json_escape(value: str) -> str:
@@ -300,9 +440,15 @@ def patch_config_text(text: str, *, search_dirs=None, clangd_path=None) -> tuple
     return updated, bool(changes), changes
 
 
-def _rewrite_as_json(text: str, *, search_dirs=None, clangd_path=None) -> tuple:
+def _rewrite_as_json(text: str, *, search_dirs=None, clangd_path=None, add_root=None) -> str:
     """整体重写的兜底路径：会丢掉注释，所以调用方必须先备份并提示。"""
     raw = json.loads(strip_json_comments(text))
+    if add_root:
+        roots = raw.get("roots")
+        if not isinstance(roots, list):
+            roots = []
+            raw["roots"] = roots
+        roots.append(add_root)
     navigation = raw.get("navigation")
     if not isinstance(navigation, dict):
         navigation = {}
@@ -363,13 +509,7 @@ def prepare_config(
     不会让用户为了"重建"再跑一遍（第一次实现里就是提前返回，白白浪费一轮）。
     """
     example = server_dir / "config.example.json"
-    target = server_dir / config_name
-    created = False
-    if not target.exists():
-        if not example.is_file():
-            raise ConfigError([f"缺少 {example.name}，无法生成 config.json"])
-        target.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
-        created = True
+    target, created = ensure_config_file(server_dir, config_name)
 
     text = target.read_text(encoding="utf-8")
     # 只有 JSON 语法坏了才重建：路径不存在、字段写错这类问题必须让用户自己决定怎么改，

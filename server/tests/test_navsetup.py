@@ -13,6 +13,7 @@ import pytest
 
 from app.config import load_config
 from app.navsetup import (
+    add_source_root,
     aosp_markers,
     aosp_signature,
     backup_path,
@@ -101,6 +102,91 @@ def test_partial_candidates_reported_when_no_full_tree(tmp_path, monkeypatch):
     result = navsetup.detect()
     assert result.aosp_roots == []
     assert [item["path"] for item in result.candidates] == [str(partial)]
+
+
+def test_detect_skips_default_scan_when_roots_are_given(tmp_path, monkeypatch):
+    """给了源码根就不该再扫 /data /home——在真实服务器上那要几分钟。"""
+    import app.navsetup as navsetup
+
+    given = make_fake_aosp(tmp_path / "given")
+    other = make_fake_aosp(tmp_path / "other")
+
+    def explode():
+        raise AssertionError("不应扫描默认位置")
+
+    monkeypatch.setattr(navsetup, "default_search_roots", explode)
+    result = navsetup.detect(search_dirs=[given], scan=True)
+    assert result.aosp_roots == [given]
+    assert other not in result.aosp_roots
+
+
+def test_add_root_preserves_comments_and_validates(tmp_path):
+    server = make_server_mirror(tmp_path)
+    tree = make_fake_aosp(tmp_path)
+    before = (server / "config.json").read_text(encoding="utf-8") if (server / "config.json").exists() else ""
+    report = add_source_root(server, tree)
+    assert report["changed"] is True
+    assert "按行插入" in report["strategy"]  # 示例配置的数组闭合行带逗号，也必须能按行插入
+    text = (server / "config.json").read_text(encoding="utf-8")
+    assert "//" in text  # 注释保留
+    config = load_config(server / "config.json")
+    added = [root for root in config.roots if root.id == "aosp"]
+    assert len(added) == 1
+    assert added[0].readonly is True and str(added[0].path) == str(tree)
+    assert Path(report["backup"]).is_file()
+    assert '"roots"' in Path(report["backup"]).read_text(encoding="utf-8")  # 备份是改动前的真实配置
+
+
+def test_add_root_is_idempotent(tmp_path):
+    server = make_server_mirror(tmp_path)
+    tree = make_fake_aosp(tmp_path)
+    add_source_root(server, tree)
+    after_first = (server / "config.json").read_text(encoding="utf-8")
+    second = add_source_root(server, tree)
+    assert second["changed"] is False
+    assert "已经有这个路径" in second["message"]
+    assert (server / "config.json").read_text(encoding="utf-8") == after_first
+
+
+def test_add_root_avoids_id_collision(tmp_path):
+    server = make_server_mirror(tmp_path)
+    first = make_fake_aosp(tmp_path / "one")
+    second = make_fake_aosp(tmp_path / "two")
+    add_source_root(server, first, root_id="aosp12")
+    report = add_source_root(server, second, root_id="aosp12")
+    assert report["entry"]["id"] == "aosp12-2"
+    config = load_config(server / "config.json")
+    ids = [root.id for root in config.roots]
+    assert "aosp12" in ids and "aosp12-2" in ids
+
+
+def test_add_root_falls_back_to_rewrite_for_empty_roots(tmp_path):
+    server = make_server_mirror(tmp_path)
+    tree = make_fake_aosp(tmp_path)
+    (server / "config.json").write_text(
+        "{\n"
+        '  "roots": [],\n'
+        '  "prototypeDir": "' + str(tmp_path / "prototype").replace("\\", "\\\\") + '"\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    report = add_source_root(server, tree)
+    assert report["changed"] is True
+    assert "整体重写" in report["strategy"]
+    config = load_config(server / "config.json")
+    assert [str(root.path) for root in config.roots] == [str(tree)]
+
+
+def test_add_root_refuses_to_write_invalid_config(tmp_path):
+    """路径不存在时校验会失败：绝不能把校验不过的配置留在原地。"""
+    server = make_server_mirror(tmp_path)
+    original = (server / "config.example.json").read_text(encoding="utf-8")
+    (server / "config.json").write_text(original, encoding="utf-8")
+    report = add_source_root(server, tmp_path / "not-there")
+    assert report["changed"] is False
+    assert report["problems"] and any("not-there" in item for item in report["problems"])
+    assert (server / "config.json").read_text(encoding="utf-8") == original
+    assert not list(server.glob("*.tmp-check"))
 
 
 def test_detect_depth_is_configurable(tmp_path, monkeypatch):
