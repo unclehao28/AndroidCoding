@@ -36,11 +36,24 @@
 clangd 查找顺序：`clangdPath` → `PATH` → `searchDirs` 下的 AOSP `prebuilts/clang/host/linux-x86/*/bin/clangd`
 （**AOSP 自带，不需要装**）。可选 `roots[].compileCommandsDir` 指向 Soong 生成的 compdb。
 
+服务器上不要手工编辑 JSON（占位符被原样粘贴、`vi` 里粘进 shell 命令都踩过），一条命令搞定：
+
+```bash
+python3 scripts/setup-navigation.py               # 找 AOSP → 找 clangd → 按行写进 config.json（保留注释、先备份）
+python3 scripts/setup-navigation.py --acceptance  # 顺带跑 12 条跳转预期
+python3 scripts/setup-navigation.py --print-only  # 只探测不改文件
+```
+
+探测有深度/条目上限，不全盘扫描；找不到就如实报告并给替代方案，不写假路径；只有配置**语法**坏了才重建
+（路径不存在这类问题只报告，不覆盖用户填好的 roots）。
+
 ## 验证记录（真实执行）
 
 | 命令 | 结果 |
 |---|---|
-| `cd server && python -m pytest` | **165 项：162 passed / 3 skipped / 0 failed**（skip=Windows 无法建符号链接） |
+| `cd server && python -m pytest` | **181 项：178 passed / 3 skipped / 0 failed，26s**（skip=Windows 无法建符号链接） |
+| 环境准备脚本（`test_navsetup.py`，16 项） | AOSP 判定（`.repo` 单独命中 / 单个通用标记不算 / 跳过 node_modules / 深度上限）、clangd 探测与来源、按行改写保留注释、备份、语法损坏才重建、**路径不存在时绝不覆盖配置** |
+| 镜像环境端到端（临时目录模拟"服务器仓库 + 一份 AOSP"） | 自动生成 config.json → 扫 2974 个目录找到 AOSP → 找到 `prebuilts/clang/host/linux-x86/clang-*/bin/clangd` → 按行写入 `searchDirs`（注释保留、生成备份）→ 输出验收命令 |
 | LSP 客户端测试（独立进程 mock LSP） | 18 项：分帧、握手、服务端请求应答、通知、单请求超时不影响进程、进程崩溃带出 stderr、多目标 |
 | 导航服务测试（真协议 + 构造结果） | 18 项：resolved/ambiguous/references 不判歧义/空结果/stale/位置越界/Java 未接入/关闭开关/实例复用/中文路径/emoji 列号/工作区外目标标记 |
 | 启动服务 + `scripts/verify-p1-http.py` | **26/26**（含 Java 明确未接入、坐标基准、能力矩阵如实上报） |
@@ -68,9 +81,16 @@ clangd 查找顺序：`clangdPath` → `PATH` → `searchDirs` 下的 AOSP `preb
 
 ## 下一步
 
-1. **你**：在服务器上跑 `python3 scripts/verify-p2-navigation.py --direct --workspace fixtures`
-   （先把 `navigation.searchDirs` 指向 AOSP 根），把输出发我——这是 P2 的最终证据；
-   顺便在页面上点几个真实 `frameworks/base` 的 C++ 符号，告诉我哪些跳得准、哪些为空。
+1. **你**：在服务器上执行两条命令，把输出发我：
+
+   ```bash
+   cd ~/android-source-workbench && git pull
+   python3 scripts/setup-navigation.py --acceptance     # 找 AOSP/clangd、写配置、跑 12 条预期
+   ```
+
+   如果它说"还差 clangd"，把当时的输出发我（脚本会打印替代方案）；如果这台机器没有源码，
+   用 `--aosp 你的源码路径` 或 `--clangd clangd路径` 再跑一次。
+   然后在页面上点几个真实 `frameworks/base` 的 C++ 符号，告诉我哪些跳得准、哪些为空。
 2. **我**：按你的反馈修 P2 的解析问题（例如加 `--query-driver`、compdb 路径探测、超时调整），
    然后做 Java 半边（JDT LS + Soong 导入适配，会单独记录支持矩阵与失败诊断）。
 3. 之后进入 P3（Zoekt 索引），需要你给的源码规模数据（文件数、数据量、机器配置、是否 repo 管理）。

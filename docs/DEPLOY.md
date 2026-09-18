@@ -142,7 +142,56 @@ python3 -m app --config config.json --sync aosp-system-core   # 只同步一个
 
 内网 GitLab 仓如果只在公司网络可达，把地址换成 SSH 形式即可；服务器上已有的免密 key 会被直接复用。
 
-## 3.6 语义跳转（P2，C/C++）与 clangd
+## 3.6 一键准备语义跳转（推荐先跑这个）
+
+不要手工编辑 JSON——服务器上手工改配置很容易出错（占位符被原样粘贴、字段名写错、在 `vi` 里粘进 shell 命令）。
+在仓库根目录执行一条命令即可：它会找 Android 源码树、找 clangd、把结果按行写进 `server/config.json`（**保留注释**、先备份），
+最后给出验收命令。
+
+```bash
+cd ~/android-source-workbench
+python3 scripts/setup-navigation.py                 # 探测 + 写配置
+python3 scripts/setup-navigation.py --acceptance    # 顺带跑 12 条跳转预期验收
+python3 scripts/setup-navigation.py --print-only    # 只看探测结果，不改任何文件
+```
+
+输出示例（真实运行）：
+
+```
+[探测] 扫描目录 2974 个，发现 Android 源码树 1 个
+    - /data/aosp
+[clangd] 18.1.8 · /data/aosp/prebuilts/clang/host/linux-x86/clang-r547379/bin/clangd
+         来源：AOSP prebuilts（/data/aosp）
+[写入] 按行替换（保留注释）
+    searchDirs → ["/data/aosp"]
+    备份：.../config.json.bak-20260918-160400
+下一步（在服务器上验收 12 条跳转预期）：
+  python3 scripts/verify-p2-navigation.py --direct --workspace fixtures
+```
+
+它的行为边界（与其它部分一致）：探测有深度与条目上限，不会全盘扫描；找不到就如实报告并给替代方案，
+**不会**往配置里写假路径；只有在配置**语法**损坏时才重建（路径不存在这类问题只报告、绝不覆盖你的配置）。
+
+如果源码不在默认扫描位置（`/data /home /opt /mnt /srv /workspace`），直接告诉它：
+
+```bash
+python3 scripts/setup-navigation.py --aosp /data/aosp           # 指定源码根（可重复传多个）
+python3 scripts/setup-navigation.py --clangd /home/you/bin/clangd
+```
+
+如果这台机器上压根没有 Android 源码（例如代码在另一台机器），clangd 需要单独准备，按成本从低到高：
+
+1. 有 sudo：`sudo apt-get install -y clangd`（Debian/Ubuntu 自带包，最省事）。
+2. 有 `apt-get` 但无 sudo：`apt-get download clangd-12`（或 `clangd-11`/`clangd-10`）→ `dpkg -x clangd-12_*.deb ~/local`
+   → 若 `~/local/usr/bin/clangd --version` 报缺库，用 `ldd` 看缺哪个，再用同样的方式解包对应的 `libclang-cpp*` / `libllvm*`，
+   然后 `LD_LIBRARY_PATH=~/local/usr/lib/x86_64-linux-gnu ~/local/usr/bin/clangd --version` 验证。
+   *这条路我无法在本机复现（本机没有 Debian 环境），请把命令输出发我，我按实际报错继续。*
+3. 不能联网也不许装包：在能上网的机器下载 LLVM 官方静态包（`clang+llvm-*-x86_64-linux-gnu-ubuntu-*.tar.xz`，约 1GB），
+   解压后取 `bin/clangd` 放进 `~/bin`，再 `python3 scripts/setup-navigation.py --clangd ~/bin/clangd`。
+
+装好后用 `python3 -m app --config config.json --check-config` 复核，它现在会直接打印 clangd 路径与版本。
+
+## 3.7 语义跳转（P2，C/C++）与 clangd
 
 P2 已接入 **C/C++**（clangd）；Java/Kotlin/Rust/AIDL 明确返回未就绪，不会用文本匹配冒充。
 

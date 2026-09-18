@@ -38,7 +38,9 @@ P1 已实现的真实能力：健康状态、工作区列表、按层目录浏�
 - `server/requirements.txt`：锁定版本的后端运行时依赖（Python >= 3.10）。
 - `server/requirements-py38.txt`：Python 3.8/3.9 服务器的运行时依赖（含 cp38 的编译扩展版本）。
 - `server/requirements-dev.txt`、`server/requirements-py38-dev.txt`：测试依赖（pytest、httpx）。
-- `server/run.sh`：Linux 启动脚本。
+- `server/run.sh`：Linux 启动脚本（自动按解释器版本选择依赖清单）。
+- `scripts/setup-navigation.py`：一键准备语义跳转（找 AOSP → 找 clangd → 写 `config.json`，保留注释并备份）。
+- `scripts/verify-p2-navigation.py`：用真实语言服务核对 12 条跳转预期（`--direct` 不需要先启动服务）。
 - `docs/DEPLOY.md`：公司服务器上的部署、试用范围、AOSP 配置与故障排查。
 - `scripts/check-package.py`：包资源与内置数据一致性检查。
 - `scripts/verify-p1-http.py`：对运行中的后端做真实 HTTP 验收。

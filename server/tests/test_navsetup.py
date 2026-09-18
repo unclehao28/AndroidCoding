@@ -1,0 +1,252 @@
+"""P2 环境准备（探测 AOSP / 找 clangd / 改配置）的测试。
+
+这些测试覆盖的正是"服务器上手工改 JSON 容易出错"的那部分：
+探测的判定规则、按行改写是否保留注释、文件损坏时能否恢复。
+"""
+from __future__ import annotations
+
+import json
+import shutil
+from pathlib import Path
+
+import pytest
+
+from app.config import load_config
+from app.navsetup import (
+    aosp_markers,
+    detect,
+    find_aosp_roots,
+    is_aosp_root,
+    patch_config_file,
+    patch_config_text,
+    prepare_config,
+)
+from conftest import REPO_ROOT, SERVER_DIR
+
+SAMPLE_ROOT = REPO_ROOT / "fixtures" / "demo-tree"
+
+
+def make_fake_aosp(base: Path, *, name: str = "aosp", clangd_version: str = "clang-r999999") -> Path:
+    root = base / name
+    (root / ".repo").mkdir(parents=True)
+    (root / "build" / "soong").mkdir(parents=True)
+    (root / "frameworks" / "base").mkdir(parents=True)
+    clangd = root / "prebuilts" / "clang" / "host" / "linux-x86" / clangd_version / "bin" / "clangd"
+    clangd.parent.mkdir(parents=True)
+    clangd.write_text("#!/bin/sh\necho 'clangd version 18.1.8'\n", encoding="utf-8")
+    clangd.chmod(0o755)
+    return root
+
+
+def make_config_text(search_dirs: str = "[]", clangd_path: str = "null") -> str:
+    return (
+        "{\n"
+        "  // 这是注释，必须保留\n"
+        '  "roots": [ { "id": "sample", "path": "' + str(SAMPLE_ROOT).replace("\\", "\\\\") + '", "readonly": true } ],\n'
+        '  "features": { "write": false, "navigation": true },\n'
+        '  "navigation": {\n'
+        '    "enabled": true,\n'
+        f'    "searchDirs": {search_dirs},\n'
+        f'    "clangdPath": {clangd_path}\n'
+        "  },\n"
+        '  "prototypeDir": "' + str(REPO_ROOT / "prototype").replace("\\", "\\\\") + '"\n'
+        "}\n"
+    )
+
+
+# ---------------------------------------------------------------- 探测规则
+
+
+def test_dot_repo_alone_marks_aosp_root(tmp_path):
+    root = tmp_path / "tree"
+    (root / ".repo").mkdir(parents=True)
+    assert is_aosp_root(root) is True
+    assert aosp_markers(root) == [".repo"]
+
+
+def test_single_generic_marker_is_not_enough(tmp_path):
+    root = tmp_path / "maybe"
+    (root / "system" / "core").mkdir(parents=True)
+    assert is_aosp_root(root) is False
+    two = tmp_path / "likely"
+    (two / "system" / "core").mkdir(parents=True)
+    (two / "frameworks" / "base").mkdir(parents=True)
+    assert is_aosp_root(two) is True
+
+
+def test_find_aosp_roots_respects_depth_and_stops_at_hit(tmp_path):
+    make_fake_aosp(tmp_path / "shallow")
+    deep = tmp_path / "a" / "b" / "c" / "d" / "e"
+    make_fake_aosp(deep)
+    found, scanned = find_aosp_roots([tmp_path], max_depth=2)
+    assert [item.name for item in found] == ["aosp"]
+    assert scanned >= 1
+    found_deep, _ = find_aosp_roots([tmp_path], max_depth=6)
+    assert len(found_deep) == 2
+
+
+def test_find_aosp_roots_skips_noise_directories(tmp_path):
+    make_fake_aosp(tmp_path / "node_modules", name="aosp")
+    found, _ = find_aosp_roots([tmp_path], max_depth=4)
+    assert found == []
+
+
+def test_detect_prefers_configured_clangd(tmp_path):
+    aosp = make_fake_aosp(tmp_path)
+    explicit = tmp_path / "my-clangd"
+    explicit.write_text("#!/bin/sh\necho 'clangd version 19.1.0'\n", encoding="utf-8")
+    explicit.chmod(0o755)
+    result = detect(configured_clangd=str(explicit), search_dirs=[aosp], scan=False)
+    assert result.clangd_path == str(explicit)
+    assert result.aosp_roots == [aosp]
+
+
+def test_detect_finds_aosp_bundled_clangd(tmp_path, monkeypatch):
+    # 屏蔽 PATH 分支，避免本机恰好装了 clangd 时结果不确定
+    import app.lsp.manager as manager_module
+    import app.navsetup as navsetup
+
+    monkeypatch.setattr(manager_module.shutil, "which", lambda name: None)
+    monkeypatch.setattr(navsetup, "system_clangd_candidates", lambda: [])
+    aosp = make_fake_aosp(tmp_path)
+    result = detect(search_dirs=[aosp], scan=False)
+    assert result.clangd_path is not None
+    assert "prebuilts" in result.clangd_path
+    assert "AOSP prebuilts" in result.clangd_source
+
+
+def test_detect_reports_missing_clangd_with_hint(tmp_path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    result = detect(search_dirs=[empty], scan=False)
+    if result.clangd_path is None:  # 本机若装了 clangd 则跳过这条断言
+        assert any("没有找到 clangd" in note for note in result.notes)
+
+
+# ---------------------------------------------------------------- 改配置
+
+
+def test_patch_config_text_keeps_comments_and_other_lines():
+    text = make_config_text()
+    updated, changed, changes = patch_config_text(text, search_dirs=["/data/aosp"], clangd_path="/opt/clangd")
+    assert changed is True
+    assert "// 这是注释，必须保留" in updated
+    assert '"searchDirs": ["/data/aosp"],' in updated
+    assert '"clangdPath": "/opt/clangd"' in updated
+    assert updated.count('"roots"') == 1
+    assert any("searchDirs" in item for item in changes)
+
+
+def test_patch_config_file_writes_backup_and_stays_valid(tmp_path):
+    config = tmp_path / "config.json"
+    config.write_text(make_config_text(), encoding="utf-8")
+    result = patch_config_file(config, search_dirs=["/data/aosp"])
+    assert result["changed"] is True
+    assert result["backup"] and Path(result["backup"]).is_file()
+    assert '"searchDirs": ["/data/aosp"]' in config.read_text(encoding="utf-8")
+    loaded = load_config(config)
+    assert loaded.navigation.search_dirs == ("/data/aosp",)
+
+
+def test_patch_config_noop_when_nothing_to_write(tmp_path):
+    config = tmp_path / "config.json"
+    config.write_text(make_config_text(), encoding="utf-8")
+    result = patch_config_file(config)
+    assert result["changed"] is False
+    assert result["backup"] is None
+
+
+def test_patch_config_falls_back_to_rewrite_without_navigation_section(tmp_path):
+    config = tmp_path / "config.json"
+    config.write_text(
+        "{\n"
+        '  "roots": [ { "id": "sample", "path": "' + str(SAMPLE_ROOT).replace("\\", "\\\\") + '", "readonly": true } ],\n'
+        '  "prototypeDir": "' + str(REPO_ROOT / "prototype").replace("\\", "\\\\") + '"\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    result = patch_config_file(config, search_dirs=["/data/aosp"])
+    assert result["changed"] is True
+    assert "整体重写" in result["strategy"]
+    loaded = load_config(config)
+    assert loaded.navigation.search_dirs == ("/data/aosp",)
+    assert json.loads(config.read_text(encoding="utf-8"))["navigation"]["searchDirs"] == ["/data/aosp"]
+
+
+# ---------------------------------------------------------------- 整体流程
+
+
+def make_server_mirror(tmp_path: Path) -> Path:
+    """造一个和真实仓库同构的最小目录：server/config.example.json + fixtures + prototype。
+
+    示例配置里的 roots 用的是相对路径，必须在同构目录下才有效。
+    """
+    server = tmp_path / "server"
+    server.mkdir()
+    shutil.copy(SERVER_DIR / "config.example.json", server / "config.example.json")
+    (tmp_path / "fixtures" / "demo-tree").mkdir(parents=True)
+    (tmp_path / "fixtures" / "demo-tree" / "keep.txt").write_text("x\n", encoding="utf-8")
+    prototype = tmp_path / "prototype"
+    prototype.mkdir()
+    (prototype / "index.html").write_text("<html></html>\n", encoding="utf-8")
+    return server
+
+
+def test_prepare_config_creates_from_example(tmp_path):
+    server = make_server_mirror(tmp_path)
+    result = prepare_config(server, scan=False)
+    assert result["created"] is True
+    assert result.get("blocked") is False
+    assert Path(result["configPath"]).is_file()
+    load_config(Path(result["configPath"]))
+
+
+def test_prepare_config_writes_detected_aosp_root(tmp_path):
+    server = make_server_mirror(tmp_path)
+    aosp = make_fake_aosp(tmp_path)
+    result = prepare_config(server, aosp_roots=[aosp], scan=False)
+    assert result["patch"]["changed"] is True
+    loaded = load_config(Path(result["configPath"]))
+    assert str(aosp) in loaded.navigation.search_dirs
+    detected = result["detection"]
+    assert detected["aospRoots"] == [str(aosp)]
+    assert detected["clangdPath"] and "prebuilts" in detected["clangdPath"]
+
+
+def test_prepare_config_writes_clangd_path_when_no_aosp(tmp_path):
+    server = make_server_mirror(tmp_path)
+    clangd = tmp_path / "clangd"
+    clangd.write_text("#!/bin/sh\necho x\n", encoding="utf-8")
+    clangd.chmod(0o755)
+    result = prepare_config(server, clangd_path=str(clangd), scan=False)
+    loaded = load_config(Path(result["configPath"]))
+    assert loaded.navigation.clangd_path == str(clangd)
+
+
+def test_prepare_config_recovers_broken_file(tmp_path):
+    server = make_server_mirror(tmp_path)
+    broken = server / "config.json"
+    broken.write_text('{ "roots": [ { "id": "x" ', encoding="utf-8")  # 明显截断
+    result = prepare_config(server, scan=False)
+    assert result["recovered"] is True
+    assert Path(result["recoveredFrom"]).is_file()
+    assert "语法错误" in result["reason"]
+    load_config(broken)  # 重建后必须是合法配置
+
+
+def test_prepare_config_never_overwrites_valid_json_with_bad_paths(tmp_path):
+    """路径不存在属于用户要自己决定的问题：只报告，绝不能覆盖配置文件。"""
+    server = make_server_mirror(tmp_path)
+    config = server / "config.json"
+    original = (
+        "{\n"
+        '  "roots": [ { "id": "mine", "path": "/data/not-here-yet", "readonly": true } ],\n'
+        '  "prototypeDir": "' + str(tmp_path / "prototype").replace("\\", "\\\\") + '"\n'
+        "}\n"
+    )
+    config.write_text(original, encoding="utf-8")
+    result = prepare_config(server, scan=False)
+    assert result["blocked"] is True
+    assert any("not-here-yet" in problem for problem in result["problems"])
+    assert config.read_text(encoding="utf-8") == original  # 原样保留
+

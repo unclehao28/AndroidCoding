@@ -5,8 +5,9 @@ __pycache__/
 .venv/
 venv/
 
-# 本地配置：可能含服务器真实路径，不随包分发
+# 本地配置：可能含服务器真实路径，不随包分发（含 setup-navigation.py 生成的备份）
 server/config.json
+server/config.json.bak-*
 
 # 远程仓库缓存目录（config.json 的 cacheDir 默认指向这里）
 .asw-cache/

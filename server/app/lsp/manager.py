@@ -99,7 +99,7 @@ CLANGD_PREBUILT_GLOBS = (
 )
 
 
-def _version_of(executable: str) -> str:
+def version_of(executable: str) -> str:
     try:
         completed = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=20)
     except (OSError, subprocess.SubprocessError):
@@ -116,16 +116,16 @@ def find_clangd(configured: str | None, search_dirs: list[Path] | None = None) -
     if configured:
         candidate = Path(os.path.expanduser(configured)).resolve()
         if candidate.is_file():
-            return str(candidate), _version_of(str(candidate)), "配置 navigation.clangdPath"
+            return str(candidate), version_of(str(candidate)), "配置 navigation.clangdPath"
         return None, "", f"配置的 clangdPath 不存在：{candidate}"
     located = shutil.which("clangd")
     if located:
-        return located, _version_of(located), "PATH 中的 clangd"
+        return located, version_of(located), "PATH 中的 clangd"
     for directory in search_dirs or []:
         for pattern in CLANGD_PREBUILT_GLOBS:
             for match in sorted(glob.glob(str(Path(directory) / pattern)), reverse=True):
                 if Path(match).is_file():
-                    return match, _version_of(match), f"AOSP prebuilts（{directory}）"
+                    return match, version_of(match), f"AOSP prebuilts（{directory}）"
     return None, "", "未找到 clangd：可设置 navigation.clangdPath，或把 AOSP 根目录加入 navigation.searchDirs"
 
 
