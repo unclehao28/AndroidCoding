@@ -67,14 +67,17 @@ class Detection:
     clangd_source: str = ""
     scanned_dirs: int = 0
     notes: list = field(default_factory=list)
+    candidates: list = field(default_factory=list)
 
     def to_public(self) -> dict:
         return {
             "aospRoots": [str(item) for item in self.aosp_roots],
+            "aospSignatures": [aosp_signature(item) for item in self.aosp_roots],
             "clangdPath": self.clangd_path,
             "clangdVersion": self.clangd_version,
             "clangdSource": self.clangd_source,
             "scannedDirs": self.scanned_dirs,
+            "candidates": list(self.candidates),
             "notes": list(self.notes),
         }
 
@@ -95,8 +98,29 @@ def is_aosp_root(path: Path) -> bool:
     markers = aosp_markers(path)
     if ".repo" in markers:
         return True
+    # prebuilts/clang 只有 AOSP 系代码树才带，单独命中即确定
+    try:
+        if (path / "prebuilts" / "clang").is_dir():
+            return True
+    except OSError:
+        pass
     # 单个标记可能是巧合（例如某个项目自带 system/core），要求至少两个
     return len(markers) >= 2
+
+
+def aosp_signature(path: Path) -> str:
+    """返回该目录作为 AOSP 根的依据（用于诊断输出）。"""
+    markers = aosp_markers(path)
+    if ".repo" in markers:
+        return "含 .repo（repo 管理的源码树）"
+    try:
+        if (path / "prebuilts" / "clang").is_dir():
+            return "含 prebuilts/clang（AOSP 自带工具链）"
+    except OSError:
+        pass
+    if len(markers) >= 2:
+        return "含 " + "、".join(markers[:4])
+    return ""
 
 
 def default_search_roots() -> list:
@@ -145,6 +169,44 @@ def find_aosp_roots(search_roots, *, max_depth: int = DEFAULT_MAX_DEPTH, max_ent
     return found, scanned
 
 
+def find_partial_candidates(search_roots, *, max_depth: int = DEFAULT_MAX_DEPTH + 2, limit: int = 10):
+    """没有找到完整源码树时，列出"像源码的一部分"的目录，供用户确认后手工指定。
+
+    只做诊断用：命中单个标记就收录，但不会拿来当源码根自动写进配置。
+    """
+    candidates: list = []
+    seen: set = set()
+    for base in search_roots:
+        base_path = Path(base).expanduser()
+        if not base_path.is_dir():
+            continue
+        stack = [(base_path, 0)]
+        while stack and len(candidates) < limit * 4:
+            current, depth = stack.pop()
+            key = os.path.normcase(str(current))
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                markers = aosp_markers(current)
+                if markers and not is_aosp_root(current):
+                    candidates.append((len(markers), current, markers))
+                    continue
+                if depth >= max_depth:
+                    continue
+                with os.scandir(current) as entries:
+                    for entry in entries:
+                        if not entry.is_dir(follow_symlinks=False):
+                            continue
+                        if entry.name in SKIP_DIR_NAMES or entry.name.startswith("."):
+                            continue
+                        stack.append((Path(entry.path), depth + 1))
+            except (PermissionError, OSError):
+                continue
+    candidates.sort(key=lambda item: (-item[0], str(item[1])))
+    return candidates[:limit]
+
+
 def system_clangd_candidates() -> list:
     if sys.platform.startswith("win"):
         return []
@@ -161,6 +223,7 @@ def detect(
     extra_search_roots=None,
     scan: bool = True,
     aosp_hint: str | None = None,
+    max_depth: int = DEFAULT_MAX_DEPTH,
 ) -> Detection:
     """找 AOSP 根与 clangd。scan=False 时只按已给的 searchDirs 找 clangd。"""
     result = Detection()
@@ -171,11 +234,19 @@ def detect(
         roots.append(Path(os.path.expanduser(aosp_hint)))
 
     if scan:
-        scanned_roots, scanned_count = find_aosp_roots(roots + default_search_roots())
+        scanned_roots, scanned_count = find_aosp_roots(roots + default_search_roots(), max_depth=max_depth)
         result.aosp_roots = scanned_roots
         result.scanned_dirs = scanned_count
         if not scanned_roots and not roots:
-            result.notes.append("默认扫描位置（/data /home /opt /mnt /srv /workspace）里没有发现 Android 源码树")
+            scanned_labels = " ".join(str(item) for item in default_search_roots())
+            result.notes.append(f"在 {scanned_labels} 下按 {max_depth} 层深度没有发现完整的 Android 源码树")
+            partial = find_partial_candidates(default_search_roots(), max_depth=max_depth + 1)
+            for count, path, markers in partial:
+                result.candidates.append(
+                    {"path": str(path), "markers": markers, "hint": f"含 {count} 个标记：{'、'.join(markers[:4])}"}
+                )
+            if result.candidates:
+                result.notes.append("下面是只含部分标记的目录（可能不是完整源码树），如果源码就在这里，用 --aosp 明确指定")
     else:
         result.aosp_roots = [item for item in roots if item.is_dir()]
         result.scanned_dirs = 0
@@ -244,9 +315,20 @@ def _rewrite_as_json(text: str, *, search_dirs=None, clangd_path=None) -> tuple:
 
 
 def backup_path(path: Path) -> Path:
+    """生成不会互相覆盖的备份路径。
+
+    一次运行里可能备份两次（先备份损坏的原文件，再备份改写前的文件），
+    秒级时间戳会撞名，后一次会把前一次冲掉——那样用户原来手工写的内容就没了。
+    """
     import time
 
-    return path.with_name(f"{path.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}")
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    candidate = path.with_name(f"{path.name}.bak-{stamp}")
+    index = 2
+    while candidate.exists():
+        candidate = path.with_name(f"{path.name}.bak-{stamp}-{index}")
+        index += 1
+    return candidate
 
 
 def patch_config_file(path: Path, *, search_dirs=None, clangd_path=None) -> dict:
@@ -273,8 +355,13 @@ def prepare_config(
     clangd_path=None,
     scan: bool = True,
     config_name: str = "config.json",
+    max_depth: int = DEFAULT_MAX_DEPTH,
 ) -> dict:
-    """确保配置文件存在，并把探测结果写进去。返回结构化结果供命令行打印。"""
+    """确保配置文件存在，并把探测结果写进去。返回结构化结果供命令行打印。
+
+    注意：配置语法损坏时会备份并重建，然后**继续**探测与写配置，
+    不会让用户为了"重建"再跑一遍（第一次实现里就是提前返回，白白浪费一轮）。
+    """
     example = server_dir / "config.example.json"
     target = server_dir / config_name
     created = False
@@ -287,45 +374,49 @@ def prepare_config(
     text = target.read_text(encoding="utf-8")
     # 只有 JSON 语法坏了才重建：路径不存在、字段写错这类问题必须让用户自己决定怎么改，
     # 覆盖配置文件会直接毁掉他填好的 roots。
+    recovered = False
+    reason = ""
+    recovered_from = None
     try:
         json.loads(strip_json_comments(text))
     except json.JSONDecodeError as exc:
+        recovered = True
+        reason = f"JSON 语法错误：{exc.msg}（第 {exc.lineno} 行）"
         backup = backup_path(target)
         backup.write_text(text, encoding="utf-8")
+        recovered_from = str(backup)
         if example.is_file():
             target.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
-        return {
-            "recovered": True,
-            "reason": f"JSON 语法错误：{exc.msg}（第 {exc.lineno} 行）",
-            "recoveredFrom": str(backup),
-            "problems": [],
-            "configPath": str(target),
-            "created": created,
-            "blocked": False,
-        }
 
     try:
         config = load_config(target)
     except ConfigError as exc:
         return {
-            "recovered": False,
+            "recovered": recovered,
+            "reason": reason,
+            "recoveredFrom": recovered_from,
             "created": created,
             "blocked": True,
             "configPath": str(target),
             "problems": list(exc.messages),
             "detection": {},
             "patch": {"changed": False, "changes": [], "backup": None},
-            "hint": "先按上面的问题修好 roots/路径（python3 -m app --config <配置文件> --check-config 会列出全部问题），再重新运行本脚本",
+            "navigation": {},
+            "hint": (
+                "先按上面的问题修好 roots/路径，再重新运行本脚本："
+                f"{sys.executable} -m app --config {target} --check-config 会列出全部问题"
+            ),
         }
 
     detection = detect(
         configured_clangd=clangd_path or config.navigation.clangd_path,
         search_dirs=list(config.navigation.search_dirs) + list(aosp_roots or []),
         scan=scan,
+        max_depth=max_depth,
     )
-    search_dirs = [str(item) for item in detection.aosp_roots] or None
-    effective_clangd = clangd_path or (detection.clangd_path if not search_dirs else None)
-    patch = patch_config_file(target, search_dirs=search_dirs, clangd_path=effective_clangd)
+    detected_dirs = [str(item) for item in detection.aosp_roots] or None
+    effective_clangd = clangd_path or (detection.clangd_path if not detected_dirs else None)
+    patch = patch_config_file(target, search_dirs=detected_dirs, clangd_path=effective_clangd)
     try:
         updated_config = load_config(target)
         problems: list = []
@@ -333,7 +424,9 @@ def prepare_config(
         updated_config = config
         problems = list(exc.messages)
     return {
-        "recovered": False,
+        "recovered": recovered,
+        "reason": reason,
+        "recoveredFrom": recovered_from,
         "blocked": False,
         "created": created,
         "configPath": str(target),

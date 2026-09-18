@@ -153,7 +153,14 @@ cd ~/android-source-workbench
 python3 scripts/setup-navigation.py                 # 探测 + 写配置
 python3 scripts/setup-navigation.py --acceptance    # 顺带跑 12 条跳转预期验收
 python3 scripts/setup-navigation.py --print-only    # 只看探测结果，不改任何文件
+python3 scripts/setup-navigation.py --depth 6       # 默认只扫 4 层，找不到源码时加深
 ```
+
+配置如果是语法坏的（例如在 `vi` 里误操作留下了空文件），脚本会先备份再重建，**并在同一次运行里继续探测**，
+不需要你再跑第二遍；备份文件名带秒级时间戳且保证不互相覆盖，你原来手工写的内容不会丢。
+
+找不到完整源码树时，它会列出"只含部分标记"的候选目录，并直接把可以复制执行的 `--aosp` 命令打印出来
+（带上真实路径，不需要你替换任何占位符）。此时 `--acceptance` **不会**硬跑验收，而是明确告诉你还差什么。
 
 输出示例（真实运行）：
 

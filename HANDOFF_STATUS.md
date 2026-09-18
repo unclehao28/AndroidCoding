@@ -51,9 +51,9 @@ python3 scripts/setup-navigation.py --print-only  # 只探测不改文件
 
 | 命令 | 结果 |
 |---|---|
-| `cd server && python -m pytest` | **181 项：178 passed / 3 skipped / 0 failed，26s**（skip=Windows 无法建符号链接） |
-| 环境准备脚本（`test_navsetup.py`，16 项） | AOSP 判定（`.repo` 单独命中 / 单个通用标记不算 / 跳过 node_modules / 深度上限）、clangd 探测与来源、按行改写保留注释、备份、语法损坏才重建、**路径不存在时绝不覆盖配置** |
-| 镜像环境端到端（临时目录模拟"服务器仓库 + 一份 AOSP"） | 自动生成 config.json → 扫 2974 个目录找到 AOSP → 找到 `prebuilts/clang/host/linux-x86/clang-*/bin/clangd` → 按行写入 `searchDirs`（注释保留、生成备份）→ 输出验收命令 |
+| `cd server && python -m pytest` | **187 项：184 passed / 3 skipped / 0 failed**（skip=Windows 无法建符号链接） |
+| 环境准备脚本（`test_navsetup.py`，20 项） | AOSP 判定（`.repo` / `prebuilts/clang` 单独命中即确定、单个通用标记不算、跳过 node_modules、深度上限）、clangd 探测与来源、按行改写保留注释、**语法损坏时备份并重建后继续跑完探测**、**路径不存在时绝不覆盖配置**、两次备份不互相覆盖、候选目录诊断 |
+| 镜像环境端到端（临时目录模拟"服务器仓库 + 一份 AOSP"） | 空配置文件 → 一次运行内完成：备份 + 重建 + 扫 2974 个目录找到 AOSP + 找到自带 clangd + 按行写入 `searchDirs`（注释保留）→ 输出验收命令；无源码时打印候选与 `find` 命令、且不硬跑验收 |
 | LSP 客户端测试（独立进程 mock LSP） | 18 项：分帧、握手、服务端请求应答、通知、单请求超时不影响进程、进程崩溃带出 stderr、多目标 |
 | 导航服务测试（真协议 + 构造结果） | 18 项：resolved/ambiguous/references 不判歧义/空结果/stale/位置越界/Java 未接入/关闭开关/实例复用/中文路径/emoji 列号/工作区外目标标记 |
 | 启动服务 + `scripts/verify-p1-http.py` | **26/26**（含 Java 明确未接入、坐标基准、能力矩阵如实上报） |
@@ -88,8 +88,9 @@ python3 scripts/setup-navigation.py --print-only  # 只探测不改文件
    python3 scripts/setup-navigation.py --acceptance     # 找 AOSP/clangd、写配置、跑 12 条预期
    ```
 
-   如果它说"还差 clangd"，把当时的输出发我（脚本会打印替代方案）；如果这台机器没有源码，
-   用 `--aosp 你的源码路径` 或 `--clangd clangd路径` 再跑一次。
+   如果它说"还差 clangd"或没有找到源码，把完整输出发我——脚本会把候选目录和可复制的命令都打出来
+   （`--depth 6` 可以扫得更深）。服务器上没有源码时，先用它打印的
+   `find / -maxdepth 5 -type d -name prebuilts` 确认源码到底在哪台机器上。
    然后在页面上点几个真实 `frameworks/base` 的 C++ 符号，告诉我哪些跳得准、哪些为空。
 2. **我**：按你的反馈修 P2 的解析问题（例如加 `--query-driver`、compdb 路径探测、超时调整），
    然后做 Java 半边（JDT LS + Soong 导入适配，会单独记录支持矩阵与失败诊断）。

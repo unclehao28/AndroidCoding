@@ -14,6 +14,8 @@ import pytest
 from app.config import load_config
 from app.navsetup import (
     aosp_markers,
+    aosp_signature,
+    backup_path,
     detect,
     find_aosp_roots,
     is_aosp_root,
@@ -72,6 +74,43 @@ def test_single_generic_marker_is_not_enough(tmp_path):
     (two / "system" / "core").mkdir(parents=True)
     (two / "frameworks" / "base").mkdir(parents=True)
     assert is_aosp_root(two) is True
+
+
+def test_prebuilts_clang_alone_marks_aosp_root(tmp_path):
+    """有的团队会裁掉 .repo 或只同步部分目录，prebuilts/clang 是足够的特征。"""
+    root = tmp_path / "trimmed"
+    (root / "prebuilts" / "clang" / "host" / "linux-x86").mkdir(parents=True)
+    assert is_aosp_root(root) is True
+    assert "prebuilts/clang" in aosp_signature(root)
+
+
+def test_partial_candidates_reported_when_no_full_tree(tmp_path, monkeypatch):
+    import app.lsp.manager as manager_module
+    import app.navsetup as navsetup
+
+    partial = tmp_path / "only-frameworks"
+    (partial / "frameworks" / "base").mkdir(parents=True)
+    candidates = navsetup.find_partial_candidates([tmp_path], max_depth=3)
+    assert [item[1] for item in candidates] == [partial]
+    assert candidates[0][2] == ["frameworks/base"]
+
+    # detect 在没有完整源码树时要把候选目录带上，供用户确认后 --aosp 指定
+    monkeypatch.setattr(navsetup, "default_search_roots", lambda: [tmp_path])
+    monkeypatch.setattr(manager_module.shutil, "which", lambda name: None)
+    monkeypatch.setattr(navsetup, "system_clangd_candidates", lambda: [])
+    result = navsetup.detect()
+    assert result.aosp_roots == []
+    assert [item["path"] for item in result.candidates] == [str(partial)]
+
+
+def test_detect_depth_is_configurable(tmp_path, monkeypatch):
+    import app.navsetup as navsetup
+
+    deep = tmp_path / "a" / "b" / "c" / "d" / "e"
+    make_fake_aosp(deep)
+    monkeypatch.setattr(navsetup, "default_search_roots", lambda: [tmp_path])
+    assert navsetup.detect(max_depth=3).aosp_roots == []
+    assert navsetup.detect(max_depth=6).aosp_roots == [deep / "aosp"]
 
 
 def test_find_aosp_roots_respects_depth_and_stops_at_hit(tmp_path):
@@ -223,15 +262,61 @@ def test_prepare_config_writes_clangd_path_when_no_aosp(tmp_path):
     assert loaded.navigation.clangd_path == str(clangd)
 
 
-def test_prepare_config_recovers_broken_file(tmp_path):
+def test_prepare_config_recovers_broken_file_and_keeps_going(tmp_path):
+    """第一次实现里恢复配置后提前返回，用户白跑一轮；必须一次跑完探测。"""
     server = make_server_mirror(tmp_path)
+    aosp = make_fake_aosp(tmp_path)
     broken = server / "config.json"
     broken.write_text('{ "roots": [ { "id": "x" ', encoding="utf-8")  # 明显截断
-    result = prepare_config(server, scan=False)
+    result = prepare_config(server, aosp_roots=[aosp], scan=False)
     assert result["recovered"] is True
+    assert result["blocked"] is False
     assert Path(result["recoveredFrom"]).is_file()
     assert "语法错误" in result["reason"]
     load_config(broken)  # 重建后必须是合法配置
+    # 同一次调用里就应该完成探测与写入
+    assert result["detection"]["aospRoots"] == [str(aosp)]
+    assert result["patch"]["changed"] is True
+    assert str(aosp) in load_config(broken).navigation.search_dirs
+
+
+def test_prepare_config_rebuilt_example_alone_is_enough_to_continue(tmp_path):
+    """配置被写成空文件（vi 误操作的真实场景）：备份 + 重建 + 继续，不得抛异常。"""
+    server = make_server_mirror(tmp_path)
+    (server / "config.json").write_text("", encoding="utf-8")
+    result = prepare_config(server, scan=False)
+    assert result["recovered"] is True
+    assert result["blocked"] is False
+    assert result["detection"]["scannedDirs"] == 0  # scan=False
+    load_config(Path(result["configPath"]))
+
+
+def test_two_backups_in_one_run_do_not_overwrite_each_other(tmp_path):
+    """一次运行会备份两次（修复前的原文 + 改写前的文件），两份都必须留得住。"""
+    server = make_server_mirror(tmp_path)
+    broken = '{\n  "roots": [ { "id": "mine", "path": "/data/mine/home" '  # 语法坏，但含用户手工写的内容
+    (server / "config.json").write_text(broken, encoding="utf-8")
+    aosp = make_fake_aosp(tmp_path)
+    result = prepare_config(server, aosp_roots=[aosp], scan=False)
+    assert result["recovered"] is True
+    backups = sorted(server.glob("config.json.bak-*"))
+    if result["patch"]["changed"]:
+        assert len(backups) == 2
+        assert any("/data/mine/home" in item.read_text(encoding="utf-8") for item in backups)
+    else:
+        assert len(backups) == 1
+
+
+def test_backup_path_is_unique_even_within_same_second(tmp_path):
+    target = tmp_path / "config.json"
+    target.write_text("x", encoding="utf-8")
+    first = backup_path(target)
+    first.write_text("broken", encoding="utf-8")
+    second = backup_path(target)
+    assert second != first
+    second.write_text("rebuilt", encoding="utf-8")
+    assert first.read_text(encoding="utf-8") == "broken"
+    assert second.read_text(encoding="utf-8") == "rebuilt"
 
 
 def test_prepare_config_never_overwrites_valid_json_with_bad_paths(tmp_path):
