@@ -51,8 +51,19 @@ if node:
     manifest = json.loads((ROOT / 'fixtures/demo-files.json').read_text(encoding='utf-8'))
     assert builtin == manifest, '内置示例数据与 fixtures/demo-files.json 不一致'
     report['demo_data_consistency'] = f'passed: {len(builtin)} 条内置示例与清单一致'
+
+    # 语法高亮器是自研的（不引入 CDN）：分词、跨行块注释、防注入、不改动可见文本都要有测试
+    highlight_test = ROOT / 'scripts' / 'test-highlight.js'
+    completed = subprocess.run([node, str(highlight_test)], capture_output=True)
+    output = completed.stdout.decode('utf-8', 'replace')
+    passed = output.count('PASS ')
+    if completed.returncode != 0:
+        print(output)
+        raise AssertionError('语法高亮测试失败：node scripts/test-highlight.js')
+    report['highlight_behavior'] = f'passed: {passed} 项（含防注入与"着色不改变可见文本"）'
 else:
     report['javascript_syntax'] = 'not run: node unavailable'
+    report['highlight_behavior'] = 'not run: node unavailable'
 
 demo = json.loads((ROOT / 'fixtures/demo-files.json').read_text(encoding='utf-8'))
 for item in demo:

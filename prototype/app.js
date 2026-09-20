@@ -56,6 +56,8 @@
 
   const esc = value => String(value === null || value === undefined ? '' : value)
     .replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+  // 语法高亮模块（highlight.js）；没加载成功就退回纯转义，功能不受影响
+  const HL = window.__aswHighlight || null;
   const baseName = p => String(p || '').split('/').pop();
   const dirName = p => String(p || '').split('/').slice(0, -1).join('/');
 
@@ -535,26 +537,49 @@
 
   function renderTreeList() {
     if (state.tab !== 'files') return '';
-    const parts = [];
+    // 子级包在 .cw-treegroup 里（带竖向引导线），层级一眼可见；
+    // 之前给每个条目加 padding-left 的做法层级感很弱，深目录根本看不出从属关系。
+    const extensionOf = name => {
+      const base = String(name || '');
+      const at = base.lastIndexOf('.');
+      if (at <= 0 || at === base.length - 1) return '';
+      const ext = base.slice(at + 1);
+      return ext.length <= 6 ? ext : '';
+    };
     const walk = (path, depth) => {
       const node = state.tree.byPath[path];
-      if (!node) return;
-      const indent = 8 + depth * 12;
-      if (node.loading) { parts.push(`<div class="cw-note" style="padding-left:${indent}px">加载中…</div>`); return; }
-      if (node.error) { parts.push(`<div class="cw-note cw-note-error" style="padding-left:${indent}px">${esc(node.error)}</div>`); return; }
-      if (!node.entries.length) { parts.push(`<div class="cw-note" style="padding-left:${indent}px">空目录</div>`); return; }
-      for (const entry of node.entries) {
-        const isDir = entry.type === 'dir';
-        const expanded = !!state.tree.expanded[entry.path];
-        const blocked = entry.accessible === false;
-        const marker = blocked ? '⤫' : (isDir ? (expanded ? '▾' : '▸') : '·');
-        parts.push(`<button type="button" class="cw-file cw-treeitem cursor-interaction${blocked ? ' cw-blocked' : ''}" data-tree="${esc(entry.path)}" data-kind="${entry.type}" data-accessible="${entry.accessible !== false}" style="padding-left:${indent}px" aria-pressed="${expanded}"><span class="cw-icontext" aria-hidden="true">${marker}</span><span>${esc(entry.name)}${entry.symlink ? ' ↗' : ''}${blocked ? '（根目录外，已阻止）' : ''}</span></button>`);
-        if (isDir && expanded && !blocked) walk(entry.path, depth + 1);
+      if (!node) return '';
+      const parts = [];
+      if (node.loading) parts.push('<div class="cw-note cw-tree-note">加载中…</div>');
+      else if (node.error) parts.push(`<div class="cw-note cw-note-error cw-tree-note">${esc(node.error)}</div>`);
+      else if (!node.entries.length) parts.push('<div class="cw-note cw-tree-note">空目录</div>');
+      else {
+        for (const entry of node.entries) {
+          const isDir = entry.type === 'dir';
+          const expanded = !!state.tree.expanded[entry.path];
+          const blocked = entry.accessible === false;
+          const marker = blocked ? '⤫' : (isDir ? (expanded ? '▾' : '▸') : '·');
+          const ext = isDir ? '' : extensionOf(entry.name);
+          parts.push(
+            `<button type="button" class="cw-file cw-treeitem cursor-interaction${blocked ? ' cw-blocked' : ''}${isDir ? ' cw-treedir' : ''}"`
+            + ` data-tree="${esc(entry.path)}" data-kind="${entry.type}" data-accessible="${entry.accessible !== false}"`
+            + ` data-depth="${depth}" aria-pressed="${expanded}" title="${esc(entry.path)}">`
+            + `<span class="cw-icontext" aria-hidden="true">${marker}</span>`
+            + `<span class="cw-treename">${esc(entry.name)}</span>`
+            + (blocked ? '<span class="cw-treeflag">根目录外，已阻止</span>' : (entry.symlink ? '<span class="cw-treeflag">↗ 符号链接</span>' : ''))
+            + (ext ? `<span class="cw-ext">${esc(ext)}</span>` : '')
+            + '</button>'
+          );
+          if (isDir && expanded && !blocked) {
+            const children = walk(entry.path, depth + 1);
+            if (children) parts.push(`<div class="cw-treegroup" data-depth="${depth + 1}">${children}</div>`);
+          }
+        }
+        if (node.truncated) parts.push(`<div class="cw-note cw-tree-note">目录条目超过上限 ${node.limit}，已截断</div>`);
       }
-      if (node.truncated) parts.push(`<div class="cw-note" style="padding-left:${indent}px">目录条目超过上限 ${node.limit}，已截断</div>`);
+      return parts.join('');
     };
-    walk('');
-    return parts.join('') || '<div class="cw-empty">展开目录以浏览真实文件</div>';
+    return walk('', 0) || '<div class="cw-empty">展开目录以浏览真实文件</div>';
   }
 
   function renderUnsyncedPrompt() {
@@ -683,9 +708,12 @@
         else if (file.status !== 'ok') {
           $('cw-view').innerHTML = `<div class="cw-code"><div class="cw-empty cw-empty-error">无法作为文本显示（${esc(file.status)}）<div class="cw-empty-sub">${esc(file.message || '')}</div></div></div>`;
         } else {
+          // 语法着色：块注释状态要在行之间传递，所以用一个可变状态对象逐行推进
+          const hlState = {block: false};
+          const colored = text => (HL ? HL.codeLine(text, file.language, hlState) : (esc(text) || '&nbsp;'));
           const lines = file.lines.map((text, index) => {
             const number = file.startLine + index + 1;
-            return `<div class="cw-line${number === state.fileLine ? ' cw-highlight' : ''}" data-lineno="${number}"><span class="cw-lineno">${number}</span><span class="cw-linecode">${esc(text) || '&nbsp;'}</span></div>`;
+            return `<div class="cw-line${number === state.fileLine ? ' cw-highlight' : ''}" data-lineno="${number}"><span class="cw-lineno">${number}</span><span class="cw-linecode">${colored(text) || '&nbsp;'}</span></div>`;
           }).join('');
           const more = file.hasMore ? `<div class="cw-editactions"><button type="button" id="cw-loadmore" class="cursor-interaction">继续加载后续 ${WINDOW_LINES} 行（已到 ${file.startLine + file.lineCount} / ${file.totalLines}）</button></div>` : '';
           $('cw-view').innerHTML = `<div class="cw-code cw-realcode" id="cw-realcode">${lines}</div>${more}<div class="cw-note">点击任意标识符会发起语义跳转请求；P1 会明确返回未就绪，不会伪造跳转。哈希 ${esc(file.hash || '')}，编码 ${esc(file.encoding || '')}，换行 ${esc(file.eol || '')}</div>`;
@@ -797,6 +825,26 @@
     openReal(path, 1);
   }
 
+  /** 把"光标所在文本节点内的偏移"换算成整行的 UTF-16 列号。
+   *
+   * 语法着色会把一行拆成很多 <span>，此时 node.value 只是其中一个片段，
+   * 直接把它当列号会把请求发到错误位置——所以必须把前面片段长度累加回来。
+   */
+  function columnInLine(node, offsetInNode) {
+    const line = node.parentElement && node.parentElement.closest('.cw-line');
+    if (!line) return null;
+    const code = line.querySelector('.cw-linecode');
+    if (!code) return null;
+    let column = 0;
+    const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
+    let current;
+    while ((current = walker.nextNode())) {
+      if (current === node) return column + offsetInNode;
+      column += (current.nodeValue || '').length;
+    }
+    return null;
+  }
+
   function wordAtPoint(x, y) {
     let node = null;
     let offset = 0;
@@ -817,7 +865,9 @@
     while (end < text.length && isWord(text[end])) end += 1;
     const word = text.slice(start, end);
     if (!word || /^[0-9]/.test(word)) return null;
-    return {word, start, end};
+    const column = columnInLine(node, start);
+    if (column === null) return {word, start, end};
+    return {word, start: column, end: column + word.length};
   }
 
   // ---------------------------------------------------------------- 事件

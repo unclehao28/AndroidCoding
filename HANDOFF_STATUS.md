@@ -54,6 +54,8 @@ python3 scripts/setup-java.py                     # Java 侧体检；--install �
 |---|---|
 | **真机双语言验收（公司服务器）** | **12/12 通过**：C++ 7 条（clangd 12.0.7，AOSP 自带）+ Java 5 条（JDT LS 1.31.0 + JDK 21）。命令：`python3 scripts/verify-p2-navigation.py --direct --workspace fixtures` |
 | `cd server && python -m pytest` | **231 项：228 passed / 3 skipped / 0 failed**（skip=Windows 无法建符号链接） |
+| 前端可读性改造（用户反馈驱动） | 目录树子级改为带竖向引导线的层级容器（原来只给每条加 padding，深目录看不出从属关系）；真实文件加**自研语法着色**（C/C++/Java/XML/Android.bp/Makefile/init/shell/Python，不引入 CDN）；`scripts/test-highlight.js` 27 项行为测试（含防注入与"着色不改变可见文本"）已并入 `check-package.py` |
+| **着色后的点击定位（关键回归点）** | 着色把一行拆成多个文本节点，原来直接拿节点内偏移当列号会发错位置；已改为累加前置节点长度换算整行列号，浏览器验收新增"点击经高亮后仍定位到正确符号"（断言应用发出的符号名 == 被点击的文字） |
 | C++ 空结果的可解释性（真机反馈驱动） | 真机上点真实 AOSP 符号返回"目标 0 个"：原因是**两棵候选树都没有 compdb**（`out/soong/development/ide/compdb/` 不存在，两棵树都没编译过）。已加：自动探测 Soong compdb + 自动 `--query-driver`；空结果时明确说明"缺 compile_commands.json"并给出三条出路（找现成 compdb / 缩小工作区 / 自己生成），`/api/health` 的 `navigation.compileCommands` 也能看到实际用的是哪个 |
 | **真机 JDT LS 排错过程（值得记住）** | 最新快照 + JDK 21：下载/解包/写配置都成功但**启动即退出**（stderr 只截到 `WARNING: Using incubator modules`）→ 加**冒烟测试**（用运行期同一条命令真的拉起并完成 initialize）+ 失败自动降级；真机上自动降级到 **1.31.0（要求 Java 17，在 JDK 21 上可运行）后 5 条 Java 用例全过**。结论：**JDT LS 最新快照在 Java 21 上跑不起来，别用**（`user.home/.local/share/asw-jdtls/最新快照` 可以删掉） |
 | 冒烟测试本机实测 | 真实 JDT LS 1.31.0 + JDK 17：**5 秒通过**（initialize 成功）；坏命令（jar 不存在）被正确判失败并带出 `Error: Unable to access jarfile ...` |

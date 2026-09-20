@@ -115,3 +115,32 @@ body{padding:16px}
 #android-workbench code{font:11px/1.6 Consolas,monospace;background:var(--cw-select);color:var(--cw-blue);padding:1px 4px;border-radius:3px;overflow-wrap:anywhere}
 #android-workbench #cw-sync{font-size:11px;min-height:28px;padding:3px 9px;border:1px solid var(--cw-border);color:var(--cw-blue)}
 #android-workbench #cw-sync-cancel{font-size:11px;min-height:28px;padding:3px 9px;border:1px solid var(--cw-border);color:var(--cw-orange)}
+
+/* 语法着色（highlight.js）：色调沿用上面的变量，明暗主题都可读 */
+#android-workbench .cw-tok-comment{color:var(--cw-muted);font-style:italic}
+#android-workbench .cw-tok-keyword{color:light-dark(#9250a5,#c8a0e2)}
+#android-workbench .cw-tok-type{color:var(--cw-blue)}
+#android-workbench .cw-tok-string{color:light-dark(#217a4b,#8ad4a1)}
+#android-workbench .cw-tok-number{color:light-dark(#a15c1a,#e6bb76)}
+#android-workbench .cw-tok-preproc{color:light-dark(#956012,#e6bb76)}
+#android-workbench .cw-tok-func{color:light-dark(#1f6f8b,#7fd3ea)}
+#android-workbench .cw-tok-tag{color:light-dark(#9250a5,#c8a0e2)}
+#android-workbench .cw-tok-attr{color:light-dark(#8a6d1f,#dcc98a)}
+#android-workbench .cw-tok-var{color:light-dark(#a15c1a,#e6bb76)}
+
+/* 文件树：子级用带竖向引导线的容器包起来，层级比单纯 padding 清楚得多 */
+#android-workbench .cw-treegroup{margin-left:13px;padding-left:2px;border-left:1px solid var(--cw-border)}
+#android-workbench .cw-treeitem{padding:4px 8px 4px 5px;border-radius:4px;text-align:left;gap:6px}
+#android-workbench .cw-treeitem:hover{background:var(--cw-select)}
+#android-workbench .cw-treeitem[aria-pressed="true"]{color:var(--cw-blue)}
+#android-workbench .cw-treeitem.cw-treedir .cw-treename{font-weight:500}
+#android-workbench .cw-treename{flex:1;min-width:0;overflow-wrap:anywhere}
+#android-workbench .cw-ext{margin-left:auto;flex-shrink:0;font:10px/1.5 Consolas,monospace;color:var(--cw-muted);border:1px solid var(--cw-border);border-radius:3px;padding:0 3px}
+#android-workbench .cw-treeflag{flex-shrink:0;font-size:10px;color:var(--cw-orange)}
+#android-workbench .cw-tree-note{padding:6px 8px;margin:0}
+
+/* 长行可横向滚动时行号仍然可见 */
+#android-workbench .cw-realcode{overflow-x:auto}
+#android-workbench .cw-realcode .cw-line{background:var(--cw-bg)}
+#android-workbench .cw-realcode .cw-line.cw-highlight{background:var(--cw-select)}
+#android-workbench .cw-realcode .cw-lineno{position:sticky;left:0;background:inherit;z-index:1}

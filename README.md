@@ -28,6 +28,7 @@ P1 已实现的真实能力：健康状态、工作区列表、按层目录浏�
 
 - `prototype/index.html`：页面入口。
 - `prototype/styles.css`：工作台样式。
+- `prototype/highlight.js`：自研轻量语法高亮（不依赖 CDN/外部库；`scripts/test-highlight.js` 有 27 项行为测试）。
 - `prototype/demo-data.js`：仅示例模式使用的内置演示数据（与 `fixtures/demo-files.json` 一致，由 `scripts/check-package.py` 校验）。
 - `prototype/api.js`：后端接口客户端（健康、工作区、目录、文件、检索、取消、导航）。
 - `prototype/app.js`：界面与两种数据来源的切换逻辑；真实模式只走 `/api`，不回退示例数据。

@@ -92,6 +92,17 @@ class CDP:
                 details = event["params"].get("exceptionDetails", {})
                 results.append(("未捕获异常（事件）", False, json.dumps(details.get("exception", {}).get("description", details))[:200]))
 
+    async def screenshot(self, target: str) -> None:
+        result = await self.call("Page.captureScreenshot", {"format": "png"})
+        data = result.get("data") if isinstance(result, dict) else None
+        if not data:
+            check("截图已生成", False, "Page.captureScreenshot 没有返回数据")
+            return
+        import base64
+
+        Path(target).write_bytes(base64.b64decode(data))
+        check("截图已生成", Path(target).is_file(), f"{target}（{Path(target).stat().st_size} 字节）")
+
     async def evaluate(self, expression: str, timeout: float = 30.0):
         result = await self.call(
             "Runtime.evaluate",
@@ -118,7 +129,9 @@ class CDP:
 CLICK_BY_ID = "document.getElementById(%s).click(); true"
 
 
-async def run_checks(cdp: CDP, base: str, java_ready_expected: bool = False) -> None:
+async def run_checks(
+    cdp: CDP, base: str, java_ready_expected: bool = False, screenshot: str | None = None
+) -> None:
     await cdp.call("Runtime.enable")
     await cdp.call("Page.enable")
     await cdp.call("Page.navigate", {"url": base + "/"})
@@ -185,6 +198,19 @@ async def run_checks(cdp: CDP, base: str, java_ready_expected: bool = False) -> 
         "跳转" in note and ("已解析" in reported or "未就绪" in reported or "需要你选择" in reported),
         f"{note} / {definitions[:80]}",
     )
+    # 代码着色：真实文件必须有 token span，且点击到的符号名要与点击的文字一致
+    tokens = await cdp.evaluate(
+        "document.querySelectorAll('#cw-realcode .cw-tok-comment, #cw-realcode .cw-tok-keyword, "
+        "#cw-realcode .cw-tok-string, #cw-realcode .cw-tok-type, #cw-realcode .cw-tok-func').length"
+    )
+    check("真实代码有语法着色", isinstance(tokens, int) and tokens > 0, f"token span 数={tokens}")
+    symbol_sent = await cdp.evaluate("document.getElementById('cw-symbol-name').textContent")
+    check(
+        "点击经高亮后仍定位到正确符号（多文本节点换算）",
+        symbol_sent == "setBrightness",
+        f"应用发出的符号={symbol_sent!r}",
+    )
+
     # 面板顶部的能力说明必须与 /api/health 报告的一致（Java 就绪时不能还写着"未接入"）。
     cap = await cdp.evaluate("document.getElementById('cw-refs-count').textContent")
     check("引用面板区分语义引用与字面匹配", "字面" in cap or "引用" in cap, cap)
@@ -199,6 +225,29 @@ async def run_checks(cdp: CDP, base: str, java_ready_expected: bool = False) -> 
 
     await cdp.evaluate("document.querySelector('#cw-list [data-tree=\"frameworks\"]').click(); true")
     check("目录可继续展开", await cdp.wait_for("!!document.querySelector('#cw-list [data-tree=\"frameworks/base\"]')", "展开子目录"), "")
+
+    # 文件树层级：子级必须在带引导线的容器里（旧版只给每条加 padding，层级看不出来）
+    tree_nested = await cdp.evaluate(
+        "(() => {const groups=[...document.querySelectorAll('#cw-list .cw-treegroup')];"
+        "if(!groups.length) return 'no-group';"
+        "const inside=groups.some(g=>g.querySelector('.cw-treeitem'));"
+        "const depths=[...document.querySelectorAll('#cw-list .cw-treeitem[data-depth]')].map(el=>el.dataset.depth);"
+        "const border=getComputedStyle(groups[0]).borderLeftWidth;"
+        "return JSON.stringify({inside,depths:depths.slice(0,6),border});})()"
+    )
+    try:
+        nested = json.loads(tree_nested)
+    except (TypeError, ValueError):
+        nested = {}
+    check(
+        "文件树子级有层级容器与引导线",
+        bool(nested.get("inside")) and "1" in (nested.get("depths") or []) and nested.get("border") not in (None, "0px"),
+        str(tree_nested)[:140],
+    )
+
+    # 在最能反映界面的一帧截图：目录树已展开 + 真实文件已打开（含语法着色）
+    if screenshot:
+        await cdp.screenshot(screenshot)
 
     await cdp.evaluate(CLICK_BY_ID % "'cw-edit'")
     edit_notice = await cdp.evaluate("document.getElementById('cw-banner').textContent")
@@ -273,6 +322,7 @@ async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="http://127.0.0.1:8787")
     parser.add_argument("--keep-open", action="store_true")
+    parser.add_argument("--screenshot", help="把最终页面截图写到该路径（目视检查用）")
     args = parser.parse_args()
 
     try:
@@ -328,7 +378,8 @@ async def main() -> int:
         check("Chromium 远程调试已就绪", target is not None, chrome)
         if target:
             async with websockets.connect(target["webSocketDebuggerUrl"], max_size=20 * 1024 * 1024) as ws:
-                await run_checks(CDP(ws), args.base, java_ready_expected)
+                browser = CDP(ws)
+                await run_checks(browser, args.base, java_ready_expected, args.screenshot)
     finally:
         process.terminate()
         try:
