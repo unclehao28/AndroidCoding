@@ -17,6 +17,8 @@ from fastapi.testclient import TestClient
 
 from app.config import build_config
 from app.lsp.manager import LanguageServerManager, LanguageServerSpec
+from app.config import RootConfig
+from app.lsp.manager import LanguageServerManager, detect_compile_commands, detect_query_driver
 from app.main import create_app
 from app.navigation import NavigationService
 from conftest import REPO_ROOT, _deep_merge, default_raw
@@ -137,6 +139,83 @@ def test_first_open_sends_readiness_barrier(tmp_path, cpp_tree):
         body = navigate(client, "needsymbol.cpp", line=5, character=16).json()
     assert body["status"] == "resolved"
     assert body["documentWarmUp"] == "ok"
+
+
+def make_aosp_like_tree(base: Path) -> Path:
+    """造一棵带 Soong compdb 与自带工具链的"类 AOSP"树。"""
+    tree = base / "aosp"
+    compdb = tree / "out" / "soong" / "development" / "ide" / "compdb"
+    compdb.mkdir(parents=True)
+    (compdb / "compile_commands.json").write_text("[]", encoding="utf-8")
+    toolchain = tree / "prebuilts" / "clang" / "host" / "linux-x86" / "clang-r416183b1" / "bin"
+    toolchain.mkdir(parents=True)
+    (toolchain / "clang++").write_text("", encoding="utf-8")
+    return tree
+
+
+class FakeClangdManager(LanguageServerManager):
+    """只把 clangd 可执行文件固定住，其余发现逻辑走真实实现。"""
+
+    def clangd(self):
+        return "/usr/bin/clangd", "12.0.7", "测试替身"
+
+
+def test_detect_compile_commands_and_query_driver(tmp_path):
+    tree = make_aosp_like_tree(tmp_path)
+    directory, note = detect_compile_commands(tree)
+    assert directory is not None and directory.endswith("compdb")
+    assert "自动探测" in note
+    assert detect_query_driver(tree) is not None
+    empty = tmp_path / "plain"
+    empty.mkdir()
+    assert detect_compile_commands(empty) == (None, "")
+    assert detect_query_driver(empty) is None
+
+
+def test_clangd_spec_uses_detected_compdb_and_query_driver(tmp_path, cpp_tree):
+    """真实 AOSP 上跳转准不准的关键：自动带上 compdb 与 --query-driver。"""
+    tree = make_aosp_like_tree(tmp_path)
+    app, config, _manager = build_app(tmp_path, cpp_tree)
+    root = RootConfig(id="aosp", name="AOSP", path=tree, readonly=True)
+    manager = FakeClangdManager(config.navigation, [root])
+    spec = manager.spec_for("cpp", "aosp")
+    joined = " ".join(spec.command)
+    assert "--compile-commands-dir=" in joined and "compdb" in joined
+    assert "--query-driver=" in joined and "clang++" in joined
+
+    info = manager.compile_commands_info()
+    assert info["workspaces"][0]["dir"].endswith("compdb")
+    assert "自动探测" in info["workspaces"][0]["source"]
+    assert info["queryDriver"]
+
+
+def test_clangd_spec_without_compdb_has_no_query_driver(tmp_path, cpp_tree):
+    app, config, _manager = build_app(tmp_path, cpp_tree)
+    root = RootConfig(id="plain", name="普通目录", path=cpp_tree, readonly=True)
+    manager = FakeClangdManager(config.navigation, [root])
+    joined = " ".join(manager.spec_for("cpp", "plain").command)
+    assert "--compile-commands-dir=" not in joined
+    assert "--query-driver=" not in joined
+    info = manager.compile_commands_info()
+    assert info["workspaces"][0]["dir"] is None
+    assert "启发式" in info["workspaces"][0]["source"]
+    assert "SOONG_GEN_COMPDB" in info["howToGenerate"]
+
+
+def test_configured_compile_commands_dir_wins_over_detection(tmp_path, cpp_tree):
+    tree = make_aosp_like_tree(tmp_path)
+    explicit = tmp_path / "my-compdb"
+    explicit.mkdir()
+    (explicit / "compile_commands.json").write_text("[]", encoding="utf-8")
+    app, config, _manager = build_app(
+        tmp_path, cpp_tree, navigation={"enabled": True, "compileCommandsDir": str(explicit)}
+    )
+    root = RootConfig(id="aosp", name="AOSP", path=tree, readonly=True)
+    manager = FakeClangdManager(config.navigation, [root])
+    joined = " ".join(manager.spec_for("cpp", "aosp").command)
+    assert str(explicit) in joined
+    info = manager.compile_commands_info()
+    assert info["workspaces"][0]["source"] == "配置"
 
 
 def test_multiple_targets_are_ambiguous_not_silently_first(tmp_path, cpp_tree):

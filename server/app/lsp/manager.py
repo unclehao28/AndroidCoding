@@ -332,6 +332,46 @@ def find_java(configured: str | None, extra_dirs=None) -> tuple:
     return None, 0, "未找到可用的 JDK（可设置 navigation.javaHome，或把 java 放进 PATH）"
 
 
+# Soong 生成 compdb 的固定位置（见 build/soong/docs/compdb.md），以及可选的整树位置
+COMPDB_RELATIVE_PATHS = (
+    "out/soong/development/ide/compdb/compile_commands.json",
+    "compile_commands.json",
+)
+# clangd 需要信任 AOSP 自带的交叉编译器，才能拿到它内置的头文件搜索路径
+CLANGD_TOOLCHAIN_GLOBS = (
+    "prebuilts/clang/host/linux-x86/*/bin/clang++",
+    "prebuilts/clang/host/linux-x86/*/bin/clang",
+    "prebuilts/clang/host/darwin-x86/*/bin/clang++",
+)
+
+
+def detect_compile_commands(root_path) -> tuple:
+    """在工作区里找 compile_commands.json，返回 (目录, 说明)。
+
+    没有编译参数时 clangd 只能用启发式解析：同文件、同 include 链还能跳，跨文件基本为空。
+    所以这里主动探测 Soong 的 compdb 产物，找到就自动用上，不用用户去改配置。
+    """
+    base = Path(root_path)
+    for relative in COMPDB_RELATIVE_PATHS:
+        candidate = base / relative
+        try:
+            if candidate.is_file():
+                return str(candidate.parent), f"{relative}（自动探测）"
+        except OSError:
+            continue
+    return None, ""
+
+
+def detect_query_driver(root_path) -> str | None:
+    """返回 --query-driver 需要的 glob；AOSP 的 clangd 要信任自己那套工具链。"""
+    base = Path(root_path)
+    for pattern in CLANGD_TOOLCHAIN_GLOBS:
+        matches = sorted(glob.glob(str(base / pattern)))
+        if matches:
+            return str(base / pattern)
+    return None
+
+
 CLANGD_PREBUILT_GLOBS = (
     "prebuilts/clang/host/linux-x86/*/bin/clangd",
     "prebuilts/clang/host/darwin-x86/*/bin/clangd",
@@ -377,8 +417,35 @@ class LanguageServerManager:
         self._lock = asyncio.Lock()
         self._clangd: tuple[str | None, str, str] | None = None
         self._java_status: dict | None = None
+        # 最近一次给 clangd 用的 compdb 目录与来源，供 /api/health 与自查如实上报
+        self._clangd_last_compile_dir: tuple[str | None, str] = (None, "")
         self.start_count = 0
         self.stop_count = 0
+
+    def compile_commands_info(self) -> dict:
+        """当前会交给 clangd 的编译参数目录（含自动探测结果），以及是否需要 query-driver。"""
+        workspaces = []
+        for root in self.root_configs.values():
+            configured = root.compile_commands_dir or self.config.compile_commands_dir
+            if configured:
+                workspaces.append({"workspaceId": root.id, "dir": str(Path(configured).expanduser()),
+                                   "source": "配置"})
+                continue
+            detected, note = detect_compile_commands(root.path)
+            workspaces.append({
+                "workspaceId": root.id,
+                "dir": detected,
+                "source": note or "未找到（clangd 只能用启发式解析：同文件/同 include 链可跳，跨文件通常为空）",
+            })
+        return {
+            "workspaces": workspaces,
+            "queryDriver": self.config.query_driver
+            or next((detect_query_driver(root.path) for root in self.root_configs.values()
+                     if detect_query_driver(root.path)), None),
+            "lastUsed": {"dir": self._clangd_last_compile_dir[0], "source": self._clangd_last_compile_dir[1]},
+            "howToGenerate": "AOSP：在源码根执行 SOONG_GEN_COMPDB=1 SOONG_GEN_COMPDB_DEBUG=1 m nothing"
+            "（产物 out/soong/development/ide/compdb/compile_commands.json，会被自动探测到）",
+        }
 
     # ------------------------------------------------------------------ 发现
 
@@ -481,12 +548,26 @@ class LanguageServerManager:
         args.append("--header-insertion=never")
         args.append(f"--pch-storage={self.config.pch_storage}")
         compile_dir = self.config.compile_commands_dir
+        compile_source = "navigation.compileCommandsDir" if compile_dir else ""
         root = self.root_configs.get(workspace_id)
         if root is not None and root.compile_commands_dir:
             compile_dir = root.compile_commands_dir
+            compile_source = "roots[].compileCommandsDir"
+        if not compile_dir and root is not None:
+            # 没配置就自动找 Soong 的 compdb 产物：真实 AOSP 上这是跳转准不准的关键
+            compile_dir, compile_source = detect_compile_commands(root.path)
+            if not compile_dir:
+                compile_source = ""
         if compile_dir:
             args.append(f"--compile-commands-dir={Path(compile_dir).expanduser()}")
+        driver = None
+        if root is not None:
+            driver = self.config.query_driver or detect_query_driver(root.path)
+        if driver and compile_dir:
+            # 只有真的用 compdb 时才需要：让 clangd 信任 AOSP 自带工具链，否则跨文件解析会失败
+            args.append(f"--query-driver={driver}")
         args.extend(self.config.clangd_args)
+        self._clangd_last_compile_dir = (str(compile_dir) if compile_dir else None, compile_source)
         display = f"clangd {version}".strip()
         return LanguageServerSpec(language=language, command=args, display_name=display, source=source)
 

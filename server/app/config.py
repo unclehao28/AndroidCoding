@@ -115,6 +115,8 @@ class NavigationSettings:
     stderr_lines: int = 200
     pch_storage: str = "disk"
     clangd_log_level: str = "error"
+    # --query-driver：用 AOSP 自带工具链编译时，clangd 需要被允许查询它才能拿到内置头文件路径
+    query_driver: str | None = None
     # Java（Eclipse JDT LS）：解包目录 / JDK / JDT LS 的工作区数据目录 / 额外参数
     java_ls_path: str | None = None
     java_home: str | None = None
@@ -128,6 +130,7 @@ class NavigationSettings:
             "clangdArgs": list(self.clangd_args),
             "searchDirs": list(self.search_dirs),
             "compileCommandsDir": self.compile_commands_dir,
+            "queryDriver": self.query_driver,
             "javaLsPath": self.java_ls_path,
             "javaHome": self.java_home,
             "javaDataDir": self.java_data_dir,
@@ -353,6 +356,7 @@ NAVIGATION_FLOAT_KEYS = {
 NAVIGATION_STR_KEYS = (
     "clangdPath",
     "compileCommandsDir",
+    "queryDriver",
     "javaLsPath",
     "javaHome",
     "javaDataDir",
@@ -433,6 +437,7 @@ def _parse_navigation(value: Any, problems: list[str], warnings: list[str]) -> N
         clangd_args=tuple(settings["clangdArgs"]),
         search_dirs=tuple(settings["searchDirs"]),
         compile_commands_dir=settings["compileCommandsDir"],
+        query_driver=settings["queryDriver"],
         java_ls_path=settings["javaLsPath"],
         java_home=settings["javaHome"],
         java_data_dir=settings["javaDataDir"],

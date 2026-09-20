@@ -57,6 +57,27 @@ def _acceptance_workspace(config) -> str:
     return config.roots[0].id if config.roots else "fixtures"
 
 
+def _compile_commands_line(config) -> list:
+    """编译参数（compdb）情况：这是真实 AOSP 上 C/C++ 跳转准不准的关键，必须自查可见。"""
+    from .lsp.manager import LanguageServerManager
+
+    try:
+        info = LanguageServerManager(config.navigation, config.roots).compile_commands_info()
+    except Exception as exc:  # noqa: BLE001 - 自查失败不能拦住启动
+        return [f"    compile_commands：状态检查失败：{exc}"]
+    found = [item for item in info["workspaces"] if item["dir"]]
+    lines = []
+    if found:
+        for item in found:
+            lines.append(f"    compile_commands：{item['dir']}（工作区 {item['workspaceId']} · {item['source']}）")
+        if info.get("queryDriver"):
+            lines.append(f"    --query-driver：{info['queryDriver']}")
+    else:
+        lines.append("    [提醒] 没有找到 compile_commands.json：跨文件/宏相关的跳转会为空或不准")
+        lines.append(f"            生成方式：{info['howToGenerate']}")
+    return lines
+
+
 def _java_status_line(config) -> list:
     """Java 侧就绪情况：与 /api/health 用的是同一份判断逻辑，避免自查和接口说法不一致。"""
     from .lsp.manager import LanguageServerManager
@@ -118,13 +139,9 @@ def _print_navigation_environment(config) -> None:
         return
     if executable:
         print(f"  语义跳转（C/C++）：clangd {version}（{executable} · 来源：{source}）")
-        compile_dirs = [root.compile_commands_dir for root in config.roots if root.compile_commands_dir]
-        if config.navigation.compile_commands_dir:
-            compile_dirs.append(config.navigation.compile_commands_dir)
-        if compile_dirs:
-            print(f"    compile_commands 目录：{', '.join(compile_dirs)}")
-        else:
-            print("    [提醒] 未配置 compile_commands 目录：跨文件/宏相关的跳转可能不准；AOSP 可用 Soong 的 compdb")
+        compile_info = _compile_commands_line(config)
+        for line in compile_info:
+            print(line)
         print(f"    验收：python3 scripts/verify-p2-navigation.py --direct --workspace {_acceptance_workspace(config)}")
     else:
         print(f"  语义跳转（C/C++）：未找到 clangd（{source}）")

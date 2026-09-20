@@ -107,6 +107,7 @@
     "searchDirs": [],
     "clangdArgs": [],
     "compileCommandsDir": null,
+    "queryDriver": null,
     "javaLsPath": null,
     "javaHome": null,
     "javaDataDir": null,

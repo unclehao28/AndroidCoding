@@ -279,6 +279,43 @@ JDK 查找顺序：`navigation.javaHome` → `JAVA_HOME` → `PATH` 里的 `java
 - `/api/health` 的 `navigation.supported.java` 会带上 `classpathSupport: false` 与具体原因，
   不要把"JDT LS 起来了"当成"AOSP Java 全部支持"。
 
+## 3.66 让 C/C++ 跳转在真实 AOSP 上更准（compile_commands.json）
+
+clangd 没有编译参数时只能用启发式解析：**同文件、同 include 链内可以跳；跨文件基本为空**。
+页面上会如实显示"语言服务没有返回目标位置"，这不是故障，也不是它假装跳不动——
+是不允许用文本匹配冒充精准跳转（产品约束第 5 条）。
+
+工作台会**自动探测** Soong 产物，不需要你改配置：
+
+```
+<源码根>/out/soong/development/ide/compdb/compile_commands.json   ← 自动使用
+<源码根>/compile_commands.json                                     ← 自动使用
+```
+
+找到后会自动加上 `--compile-commands-dir=<目录>` 与 `--query-driver=<源码根>/prebuilts/clang/host/linux-x86/*/bin/clang++`
+（后者让 clangd 信任 AOSP 自带工具链，才能拿到内置头文件路径）。也可以显式配置：
+`navigation.compileCommandsDir` / `roots[].compileCommandsDir` / `navigation.queryDriver`。
+
+自查与接口里能看到实际用了哪个：`python3 -m app --config config.json --check-config`，
+或 `/api/health` 的 `navigation.compileCommands`（含"没找到时怎么生成"的提示）。
+
+生成 compdb（AOSP，参考 `build/soong/docs/compdb.md`）：
+
+```bash
+cd <源码根>
+SOONG_GEN_COMPDB=1 SOONG_GEN_COMPDB_DEBUG=1 m nothing     # 产物在 out/soong/development/ide/compdb/
+```
+
+**注意两点**：跑 Soong 会写入该源码树的 `out/`（要几分钟到几十分钟），**不要直接在同事的源码树里跑**；
+优先看看已有的构建树（例如 Jenkins 的 job 目录）里是不是已经有 compdb。
+
+没有 compdb 时的替代做法（都不写源码树）：
+
+1. 把常用子树单独登记成工作区，缩小 clangd 的解析范围：
+   `python3 scripts/setup-navigation.py --add-root /data/aosp12/frameworks/base`
+2. 在该子树范围可控的前提下打开 `navigation.backgroundIndex`（clangd 自建索引，
+   缓存在 `~/.cache/clangd`，不写源码树）；整套 AOSP 上开启非常吃 CPU/内存/磁盘，请谨慎。
+
 ## 3.7 语义跳转（P2，C/C++）与 clangd
 
 P2 已接入 **C/C++**（clangd）；Java/Kotlin/Rust/AIDL 明确返回未就绪，不会用文本匹配冒充。

@@ -151,6 +151,8 @@ class NavigationService:
                 suffix: reason for suffix, reason in sorted(KNOWN_UNSUPPORTED.items())
             },
             "manager": manager_status,
+            # 编译参数情况直接暴露出来：真实 AOSP 上跳不准的第一原因就是没有 compdb
+            "compileCommands": self.manager.compile_commands_info(),
             "note": "语义能力按语言单独记录：clangd 就绪不等于 Java/AIDL/Rust 就绪",
         }
 
