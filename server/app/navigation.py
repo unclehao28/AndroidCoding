@@ -18,7 +18,7 @@ from urllib.parse import unquote, urlparse
 
 from .config import AppConfig, RootConfig
 from .lsp.client import LspError, LspProcessError, LspTimeoutError, is_document_not_ready
-from .lsp.manager import LanguageServerManager, ServerHandle
+from .lsp.manager import LanguageServerManager, ServerHandle, detect_compile_commands
 from .lsp.positions import make_range, split_lines, word_at
 
 STATUS_RESOLVED = "resolved"
@@ -330,13 +330,33 @@ class NavigationService:
                 base["reason"] = "语言服务没有返回引用（注释与字符串中的同名文本不算引用）"
             else:
                 base["status"] = STATUS_UNAVAILABLE
-                base["reason"] = "语言服务没有返回目标位置"
-                if not (handle.root / "compile_commands.json").exists() and not self._compile_db_dir(handle):
-                    base["hints"].append(
-                        "当前工作区没有 compile_commands.json：跨文件/宏相关的跳转可能不准或为空；"
-                        "AOSP 可用 Soong 的 compdb 生成后指向 navigation.compileCommandsDir 或 roots[].compileCommandsDir"
+                compile_dir = self._effective_compile_db(handle)
+                if language == "cpp" and not compile_dir:
+                    # 真实 AOSP 上这是"跳不动"的头号原因，直接把原因和三条出路说清楚
+                    base["reason"] = (
+                        "语言服务没有返回目标位置：该工作区没有 compile_commands.json，"
+                        "clangd 只能用启发式解析（同文件、同 include 链内可跳，跨文件通常为空）"
                     )
-                base["hints"].append("也可能是该位置不是标识符，或该符号在本编译单元内不可解析")
+                    base["hints"].extend(
+                        [
+                            "优先找现成的 compdb：构建过的树里通常在 out/soong/development/ide/compdb/compile_commands.json，"
+                            "工作台会自动探测（无需改配置）",
+                            "没有现成 compdb 时，把常用子树单独登记成工作区可提高命中率："
+                            "python3 scripts/setup-navigation.py --add-root <源码根>/frameworks/base",
+                            "要在自己的 checkout 里生成 compdb：SOONG_GEN_COMPDB=1 SOONG_GEN_COMPDB_DEBUG=1 m nothing"
+                            "（会写该树的 out/，不建议在别人的源码树里跑）",
+                            "已确认有 compdb 时可用 navigation.compileCommandsDir 或 roots[].compileCommandsDir 显式指定",
+                        ]
+                    )
+                    base["compileCommands"] = self.manager.compile_commands_info()
+                else:
+                    base["reason"] = "语言服务没有返回目标位置"
+                    base["hints"].append("也可能是该位置不是标识符，或该符号在本编译单元内不可解析")
+                    if language == "cpp" and not self.config.navigation.background_index:
+                        base["hints"].append(
+                            "当前未开启 backgroundIndex：跨编译单元的定义跳转依赖索引或 compdb，"
+                            "在范围可控的子树上可考虑开启（整套 AOSP 开启非常吃资源）"
+                        )
                 base["server"]["stderrTail"] = handle.client.stderr_tail(5)
             return self._finish(base, started)
 
@@ -355,6 +375,27 @@ class NavigationService:
         for arg in handle.spec.command:
             if arg.startswith("--compile-commands-dir="):
                 return arg.split("=", 1)[1]
+        return None
+
+    def _effective_compile_db(self, handle: ServerHandle) -> str | None:
+        """这个工作区实际有没有编译参数：命令里的 · 配置里的 · 自动探测到的，三者取其一。
+
+        只看命令行参数是不够的：配置了 navigation.compileCommandsDir（或自动探测到 Soong 的 compdb）
+        时也要算"有 compdb"，否则空结果的解释会误导人。
+        """
+        from_cmd = self._compile_db_dir(handle)
+        if from_cmd:
+            return from_cmd
+        configured = self.config.navigation.compile_commands_dir
+        root = self.manager.root_configs.get(handle.workspace_id)
+        if root is not None and root.compile_commands_dir:
+            configured = root.compile_commands_dir
+        if configured:
+            return str(Path(configured).expanduser())
+        if root is not None:
+            detected, _note = detect_compile_commands(root.path)
+            if detected:
+                return detected
         return None
 
     async def _request_navigation(self, handle, method: str, params: dict[str, Any]) -> Any:

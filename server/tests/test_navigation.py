@@ -257,6 +257,35 @@ def test_empty_references_are_a_normal_outcome(tmp_path, cpp_tree):
         assert "引用" in body["reason"]
 
 
+def test_empty_cpp_result_without_compdb_explains_how_to_fix(tmp_path, cpp_tree):
+    """真实 AOSP 上"点了没反应"的头号原因是缺 compdb：空结果必须给出原因和出路。"""
+    app, _config, _manager = build_app(tmp_path, cpp_tree)
+    with TestClient(app) as client:
+        body = navigate(client, "empty.cpp", line=5, character=16).json()
+    assert body["status"] == "unavailable"
+    assert "compile_commands.json" in body["reason"]
+    hints = " ".join(body["hints"])
+    assert "自动探测" in hints          # 现成 compdb 的位置
+    assert "--add-root" in hints        # 缩小工作区
+    assert "SOONG_GEN_COMPDB" in hints  # 自己生成
+    assert body["compileCommands"]["workspaces"][0]["dir"] is None
+
+
+def test_empty_cpp_result_with_compdb_has_no_compdb_lecture(tmp_path, cpp_tree):
+    explicit = tmp_path / "my-compdb"
+    explicit.mkdir()
+    (explicit / "compile_commands.json").write_text("[]", encoding="utf-8")
+    app, _config, _manager = build_app(
+        tmp_path, cpp_tree, navigation={"enabled": True, "compileCommandsDir": str(explicit)}
+    )
+    with TestClient(app) as client:
+        body = navigate(client, "empty.cpp", line=5, character=16).json()
+    assert body["status"] == "unavailable"
+    assert "compile_commands.json" not in body["reason"]   # 已经有 compdb，不再讲这一套
+    assert any("backgroundIndex" in hint for hint in body["hints"])  # 改为提示索引相关
+    assert "compileCommands" not in body
+
+
 def test_language_server_crash_is_reported_with_stderr(tmp_path, cpp_tree):
     app, _config, _manager = build_app(tmp_path, cpp_tree)
     with TestClient(app) as client:

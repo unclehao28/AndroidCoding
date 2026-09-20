@@ -53,7 +53,8 @@ python3 scripts/setup-java.py                     # Java 侧体检；--install �
 | 命令 | 结果 |
 |---|---|
 | **真机双语言验收（公司服务器）** | **12/12 通过**：C++ 7 条（clangd 12.0.7，AOSP 自带）+ Java 5 条（JDT LS 1.31.0 + JDK 21）。命令：`python3 scripts/verify-p2-navigation.py --direct --workspace fixtures` |
-| `cd server && python -m pytest` | **221 项：218 passed / 3 skipped / 0 failed**（skip=Windows 无法建符号链接） |
+| `cd server && python -m pytest` | **231 项：228 passed / 3 skipped / 0 failed**（skip=Windows 无法建符号链接） |
+| C++ 空结果的可解释性（真机反馈驱动） | 真机上点真实 AOSP 符号返回"目标 0 个"：原因是**两棵候选树都没有 compdb**（`out/soong/development/ide/compdb/` 不存在，两棵树都没编译过）。已加：自动探测 Soong compdb + 自动 `--query-driver`；空结果时明确说明"缺 compile_commands.json"并给出三条出路（找现成 compdb / 缩小工作区 / 自己生成），`/api/health` 的 `navigation.compileCommands` 也能看到实际用的是哪个 |
 | **真机 JDT LS 排错过程（值得记住）** | 最新快照 + JDK 21：下载/解包/写配置都成功但**启动即退出**（stderr 只截到 `WARNING: Using incubator modules`）→ 加**冒烟测试**（用运行期同一条命令真的拉起并完成 initialize）+ 失败自动降级；真机上自动降级到 **1.31.0（要求 Java 17，在 JDK 21 上可运行）后 5 条 Java 用例全过**。结论：**JDT LS 最新快照在 Java 21 上跑不起来，别用**（`user.home/.local/share/asw-jdtls/最新快照` 可以删掉） |
 | 冒烟测试本机实测 | 真实 JDT LS 1.31.0 + JDK 17：**5 秒通过**（initialize 成功）；坏命令（jar 不存在）被正确判失败并带出 `Error: Unable to access jarfile ...` |
 | **真实 JDT LS**（1.31.0 + JDK 17）跑 5 条 Java 用例 | **5/5 PASS**：参数、字段声明、字段读取、两个同名局部变量（遮蔽）全部 `resolved`、各 1 个目标、位置与预期一致；首请求即成功，总耗时 11s |
