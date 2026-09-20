@@ -306,6 +306,8 @@ class NavigationService:
         except LspProcessError as exc:
             base["status"] = STATUS_UNAVAILABLE
             base["reason"] = f"语言服务异常：{exc}"
+            base["server"]["stderrTail"] = handle.client.stderr_tail(8)
+            base["hints"].append("语言服务启动或运行失败；server.stderrTail 是它最后的输出，据此判断原因")
             return self._finish(base, started)
         except LspError as exc:
             base["status"] = STATUS_UNAVAILABLE

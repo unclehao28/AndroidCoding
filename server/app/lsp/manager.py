@@ -242,6 +242,61 @@ def java_major_version(executable: str) -> int | None:
     return 1 if major == 1 and match.group(2) else major  # 1.8 → 8
 
 
+def java_home_of(java_executable: str) -> str | None:
+    """从 java 可执行文件推出 JAVA_HOME（会解析符号链接）。
+
+    /usr/bin/java 通常是指向 /usr/lib/jvm/<name>/bin/java 的软链，
+    直接把 /usr 当 JAVA_HOME 虽然能启动，但让 JDT LS 用它自己的 JDK 做编译时容易出怪问题。
+    """
+    path = Path(java_executable)
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path
+    if resolved.parent.name == "bin":
+        return str(resolved.parent.parent)
+    return None
+
+
+def build_jdtls_command(
+    java_path: str,
+    ls_dir: str,
+    data_dir: str,
+    *,
+    log_level: str = "error",
+    extra_args=(),
+) -> list:
+    """按 JDT LS 自带 bin/jdtls 的写法拼启动命令。
+
+    -Dosgi.* 与 --add-opens 一项都不能少，否则 JDT LS 会启动即退出；
+    这里抽成独立函数，安装脚本的"能不能真的起来"的冒烟测试与运行期用的是同一份命令。
+    """
+    launcher = jdtls_launcher(ls_dir)
+    config_dir = jdtls_config_dir(ls_dir)
+    args = [
+        java_path,
+        "-Declipse.application=org.eclipse.jdt.ls.core.id1",
+        "-Dosgi.bundles.defaultStartLevel=4",
+        "-Declipse.product=org.eclipse.jdt.ls.core.product",
+        "-Dosgi.checkConfiguration=true",
+        f"-Dosgi.sharedConfiguration.area={config_dir}",
+        "-Dosgi.sharedConfiguration.area.readOnly=true",
+        "-Dosgi.configuration.cascaded=true",
+        f"-Dlog.level={log_level}",
+        "-Xms256m",
+        "-Xmx1G",
+        "--add-modules=ALL-SYSTEM",
+        "--add-opens",
+        "java.base/java.util=ALL-UNNAMED",
+        "--add-opens",
+        "java.base/java.lang=ALL-UNNAMED",
+    ]
+    if launcher:
+        args += ["-jar", launcher, "-data", str(data_dir)]
+    args.extend(extra_args)
+    return args
+
+
 def find_java(configured: str | None, extra_dirs=None) -> tuple:
     """返回 (java 可执行文件, JDK 版本, 说明)。"""
     candidates: list = []
@@ -266,7 +321,12 @@ def find_java(configured: str | None, extra_dirs=None) -> tuple:
         version = java_major_version(str(path))
         if version is None:
             continue
-        return str(path), version, f"JDK {version}：{path}"
+        resolved = path
+        try:
+            resolved = Path(path).resolve()  # /usr/bin/java → 真实 JDK 路径
+        except OSError:
+            resolved = path
+        return str(resolved), version, f"JDK {version}：{resolved}"
     if configured:
         return None, 0, f"配置的 navigation.javaHome 下没有可用的 java：{configured}"
     return None, 0, "未找到可用的 JDK（可设置 navigation.javaHome，或把 java 放进 PATH）"
@@ -373,37 +433,19 @@ class LanguageServerManager:
         if not status["available"]:
             return None
         ls_dir = status["lsPath"]
-        launcher = jdtls_launcher(ls_dir)
-        config_dir = jdtls_config_dir(ls_dir)
         data_dir = Path(status["dataDir"])
         try:
             data_dir.mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
-        # 参数按 JDT LS 自带 bin/jdtls 脚本的写法来（-Dosgi.* / --add-opens 一项都不能少）
-        args = [
+        # 与安装脚本的冒烟测试共用同一份命令（-Dosgi.* / --add-opens 一项都不能少）
+        args = build_jdtls_command(
             status["javaPath"],
-            "-Declipse.application=org.eclipse.jdt.ls.core.id1",
-            "-Dosgi.bundles.defaultStartLevel=4",
-            "-Declipse.product=org.eclipse.jdt.ls.core.product",
-            "-Dosgi.checkConfiguration=true",
-            f"-Dosgi.sharedConfiguration.area={config_dir}",
-            "-Dosgi.sharedConfiguration.area.readOnly=true",
-            "-Dosgi.configuration.cascaded=true",
-            f"-Dlog.level={self.config.clangd_log_level}",
-            "-Xms256m",
-            "-Xmx1G",
-            "--add-modules=ALL-SYSTEM",
-            "--add-opens",
-            "java.base/java.util=ALL-UNNAMED",
-            "--add-opens",
-            "java.base/java.lang=ALL-UNNAMED",
-            "-jar",
-            launcher,
-            "-data",
+            ls_dir,
             str(data_dir),
-        ]
-        args.extend(self.config.java_args)
+            log_level=self.config.clangd_log_level,
+            extra_args=self.config.java_args,
+        )
         return LanguageServerSpec(
             language="java",
             command=args,

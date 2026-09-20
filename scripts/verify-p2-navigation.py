@@ -201,7 +201,12 @@ async def run_cases(navigator, cases: list, kind_override: str | None) -> None:
         if status in ("resolved",) and hits:
             check(case_id, True, detail)
             continue
-        reason = (body.get("reason") or "")[:120]
+        raw_reason = body.get("reason") or ""
+        # 长原因（例如语言服务退出时带出的 stderr）要保留**尾部**：真正的原因通常在最后
+        reason = raw_reason if len(raw_reason) <= 200 else "…" + raw_reason[-200:]
+        tail = (body.get("server") or {}).get("stderrTail") or []
+        if tail and "stderr 尾部" not in reason:
+            reason += " | stderr: " + " / ".join(tail[-3:])
         actual = ", ".join(
             f"{t.get('path')}@{(t.get('range') or {}).get('start')}" for t in targets[:3]
         ) or "无"

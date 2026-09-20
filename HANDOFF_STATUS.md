@@ -52,7 +52,9 @@ python3 scripts/setup-java.py                     # Java 侧体检；--install �
 
 | 命令 | 结果 |
 |---|---|
-| `cd server && python -m pytest` | **214 项：211 passed / 3 skipped / 0 failed**（skip=Windows 无法建符号链接） |
+| `cd server && python -m pytest` | **221 项：218 passed / 3 skipped / 0 failed**（skip=Windows 无法建符号链接） |
+| **真机 JDT LS（最新快照 + JDK 21）** | 下载/解包/写配置都成功，但**启动即退出**（stderr 只有 `WARNING: Using incubator modules` 一行，真正原因被截断）→ 已修：安装时加**冒烟测试**（用运行期同一条命令真的拉起并完成 initialize）+ 失败自动降级，并把每档 stderr 尾部打出来；`/api/navigation` 的进程异常也会带 `server.stderrTail` |
+| 冒烟测试本机实测 | 真实 JDT LS 1.31.0 + JDK 17：**5 秒通过**（initialize 成功）；坏命令（jar 不存在）被正确判失败并带出 `Error: Unable to access jarfile ...` |
 | **真实 JDT LS**（1.31.0 + JDK 17）跑 5 条 Java 用例 | **5/5 PASS**：参数、字段声明、字段读取、两个同名局部变量（遮蔽）全部 `resolved`、各 1 个目标、位置与预期一致；首请求即成功，总耗时 11s |
 | `scripts/setup-java.py`（本机实测） | 体检正确报出 `JDK 17` 与"未找到 JDT LS"；`--install --target <已有目录>` 走复用路径：校验"该版本要求 Java 17 = 本机 17"→ 按行写入 `javaLsPath`/`javaHome`（注释保留）+ 备份；`--config` 指向的配置若非法则**拒绝写入** |
 | Java 版本兼容规则（`test_java_language_server.py`，14 项） | 从 `bin/jdtls.py` / `bin/jdtls`（shell）/ `requires at least Java` 三种写法读要求；`pick_release`：21+→最新快照、17–20→1.31.0、11–16→1.12.0、8→拒绝；release 表必须按 JDK 要求降序；所有下载地址是官方 https |
@@ -65,9 +67,8 @@ python3 scripts/setup-java.py                     # Java 侧体检；--install �
 
 ## 未完成（禁止对外宣称已实现）
 
-- **Java 的真机状态未验证**：本机（Windows + JDK 17 + JDT LS 1.31.0）5/5 通过，但公司服务器上
-  还没有可用的 JDK/JDT LS（AOSP 自带 `prebuilts/jdk/jdk11` 只够配 1.12.0）。需要在服务器上跑
-  `python3 scripts/setup-java.py` 才能确定走哪条路。
+- **Java 的真机状态未通过**：服务器上 JDK 21 + 最新快照会启动即退出（见上表），修复（冒烟测试 +
+  自动降级）已推送但**尚未重跑**。需要在服务器上重跑 `python3 scripts/setup-java.py --install`。
 - **AOSP Java 的跨模块解析**：Soong 不是 Maven/Gradle，JDT LS 无法导入工程；同文件/同目录可用，
   跨模块依赖为空（接口如实返回 `unavailable`，`classpathSupport=false`）。导入适配未开始。
 - Kotlin / Rust / AIDL 未接入；AOSP 的 `compile_commands.json`、`--query-driver` 未做；
@@ -96,12 +97,11 @@ python3 scripts/setup-java.py                     # Java 侧体检；--install �
 
    ```bash
    cd ~/android-source-workbench && git pull
-   python3 scripts/setup-java.py                      # 先看有没有可用 JDK/JDT LS
-   python3 scripts/setup-java.py --install            # 按 JDK 版本自动装匹配的 JDT LS
+   python3 scripts/setup-java.py --install            # 冒烟测试 + 失败自动降级，会打印每档 stderr
    python3 scripts/verify-p2-navigation.py --direct --workspace fixtures   # 期望 12/12
    ```
 
-   若提示"未找到可用的 JDK"或"JDK 版本不足"，把这步输出发我。
+   如果三档都起不来，把"尝试记录"那几行发我（里面是 JDT LS 的真实退出原因）。
 2. **我**：按反馈修 P2 解析问题（`--query-driver`、compdb 探测、超时调整），再做 AOSP Java 的
    Soong 导入适配（跨模块解析，会单独记录支持矩阵与失败诊断）。
 3. 之后进入 P3（Zoekt 索引），需要源码规模数据（文件数、数据量、机器配置、是否 repo 管理）。

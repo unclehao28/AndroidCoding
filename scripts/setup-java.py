@@ -19,11 +19,11 @@ AOSP 自带的 prebuilts/jdk/jdk11 通常是 11，因此多数 AOSP 机器上需
 from __future__ import annotations
 
 import argparse
-import json
+import asyncio
 import os
-import re
 import sys
 import tarfile
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -41,8 +41,11 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 from app.config import ConfigError, load_config  # noqa: E402
+from app.lsp.client import LspClient, LspError, LspProcessError  # noqa: E402
 from app.navsetup import update_navigation_config  # noqa: E402
 from app.lsp.manager import (  # noqa: E402
+    build_jdtls_command,
+    java_home_of,
     jdtls_config_dir,
     jdtls_launcher,
     jdtls_required_java,
@@ -125,6 +128,89 @@ def configured_search_dirs(config_path: Path) -> tuple:
     return dirs, config
 
 
+async def smoke_test_jdtls(command: list, *, cwd: Path, timeout: float = 150.0) -> tuple:
+    """真的把语言服务拉起来一次，完成 initialize 握手。
+
+    为什么必须做：JDT LS "解包成功"不代表"能运行"。实测最新快照在 JDK 21 上会启动即退出
+    （class file version 不支持），只校验目录结构是发现不了的。这里用与运行期完全相同的命令启动，
+    失败时把 stderr 尾部带出来，让原因清楚可见。
+    """
+    client = LspClient(command, cwd=cwd, name="jdtls-smoke", stderr_limit=400)
+    try:
+        await client.start()
+    except LspProcessError as exc:
+        return False, str(exc)
+    try:
+        await client.request(
+            "initialize",
+            {
+                "processId": None,
+                "rootUri": cwd.as_uri(),
+                "workspaceFolders": [{"uri": cwd.as_uri(), "name": "smoke"}],
+                "capabilities": {
+                    "textDocument": {"definition": {}, "references": {}, "synchronization": {"didSave": False}},
+                    "workspace": {"configuration": False, "workspaceFolders": True},
+                },
+                "initializationOptions": {
+                    "settings": {"java": {"import": {"maven": {"enabled": False}, "gradle": {"enabled": False}}}}
+                },
+            },
+            timeout=timeout,
+        )
+        client.notify("initialized", {})
+        return True, "initialize 成功"
+    except LspError as exc:
+        tail = " | ".join(client.stderr_tail(6))
+        return False, f"{exc}" + (f"；stderr 尾部：{tail}" if tail else "")
+    finally:
+        try:
+            await client.shutdown()
+        except Exception:  # noqa: BLE001 - 冒烟测试收尾失败不影响结论
+            pass
+
+
+def release_candidates(java_version: int) -> list:
+    """该 JDK 能跑的所有版本，新的在前（表本身按 JDK 要求降序）。"""
+    return [release for release in JDTLS_RELEASES if java_version >= release["min_java"]]
+
+
+def install_with_fallback(java: str, java_version: int, *, target_override: str | None = None) -> tuple:
+    """从最新版本开始逐个尝试：下载 → 校验目录 → 真的启动一次；失败就降级。
+
+    返回 (release, ls_dir, attempts)；attempts 是 [(label, 结论)]，失败时用于如实报告。
+    """
+    attempts: list = []
+    smoke_root = Path(tempfile.gettempdir()) / "asw-jdtls-smoke"
+    candidates = release_candidates(java_version)
+    for index, release in enumerate(candidates):
+        if target_override and index == 0:
+            target = Path(os.path.expanduser(target_override))
+        else:
+            target = default_target(release)
+        if not (jdtls_launcher(str(target)) and jdtls_config_dir(str(target))):
+            try:
+                download_and_unpack(release["url"], target)
+            except SystemExit as exc:
+                attempts.append((release["label"], str(exc)))
+                continue
+        required = jdtls_required_java(str(target))
+        if required and java_version < required:
+            attempts.append((release["label"], f"要求 Java {required}，本机 {java_version}"))
+            continue
+        try:
+            smoke_root.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        data_dir = smoke_root / f"ws-{release['label']}"
+        command = build_jdtls_command(java, str(target), str(data_dir))
+        ok, detail = asyncio.run(smoke_test_jdtls(command, cwd=smoke_root))
+        attempts.append((release["label"], "启动成功" if ok else detail))
+        if ok:
+            return release, str(target), attempts
+        print(f"[降级] {release['label']} 启动失败：{detail[:400]}")
+    return None, None, attempts
+
+
 def report_only(config_path: Path) -> int:
     search_dirs, config = configured_search_dirs(config_path)
     java, java_version, java_note = find_java(None, search_dirs)
@@ -196,23 +282,27 @@ def main() -> int:
             for line in JDK_HELP:
                 print("  " + line)
             return 2
-        target = Path(os.path.expanduser(args.target)) if args.target else default_target(release)
-        if not (jdtls_launcher(str(target)) and jdtls_config_dir(str(target))):
-            download_and_unpack(release["url"], target)
-        else:
-            print(f"[复用] {target} 已存在可用的 JDT LS")
-        required = jdtls_required_java(str(target))
-        launcher = jdtls_launcher(str(target))
-        config_dir = jdtls_config_dir(str(target))
-        if not launcher or not config_dir:
-            print(f"[失败] 解包后仍找不到 launcher/config 目录：{target}")
+        chosen, ls_dir, attempts = install_with_fallback(java, java_version, target_override=args.target)
+        print("[尝试记录]")
+        for label, detail in attempts:
+            print(f"  - {label}：{detail[:300]}")
+        if not chosen or not ls_dir:
+            print("\n[失败] 所有候选版本都起不来，未写入配置。上面的 stderr 尾部就是真实原因。")
+            for line in JDK_HELP:
+                print("  " + line)
             return 2
-        if required and java_version < required:
-            print(f"[失败] 这套 JDT LS 要求 Java {required}+，而 {java} 是 {java_version}")
-            return 2
-        print(f"[校验] JDT LS 就绪：{target}（要求 Java {required or '未声明'}，launcher={Path(launcher).name}）")
-        updates["javaLsPath"] = str(target)
-        updates.setdefault("javaHome", str(Path(java).parent.parent))
+        launcher = jdtls_launcher(ls_dir)
+        print(
+            f"[校验] {chosen['label']} 启动成功：{ls_dir}"
+            f"（launcher={Path(launcher).name if launcher else '?'}，JDK {java_version}）"
+        )
+        updates["javaLsPath"] = ls_dir
+        updates.setdefault("javaHome", java_home_of(java) or str(Path(java).parent.parent))
+        if chosen["label"] != release["label"]:
+            print(
+                f"[说明] 最新版本（{release['label']}）在本机 JDK {java_version} 上起不来，"
+                f"已自动降级到 {chosen['label']}；这是版本兼容问题，不是配置错误。"
+            )
 
     if not updates:
         return report_only(config_path)

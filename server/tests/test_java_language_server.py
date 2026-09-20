@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import sys
 from pathlib import Path
@@ -13,7 +14,9 @@ from pathlib import Path
 import pytest
 
 from app.lsp.manager import (
+    build_jdtls_command,
     find_jdtls,
+    java_home_of,
     jdtls_config_dir,
     jdtls_launcher,
     jdtls_required_java,
@@ -21,6 +24,7 @@ from app.lsp.manager import (
 from conftest import REPO_ROOT
 
 SETUP_JAVA = REPO_ROOT / "scripts" / "setup-java.py"
+MOCK_SERVER = Path(__file__).resolve().parent / "mock_lsp_server.py"
 
 
 def load_setup_java():
@@ -117,3 +121,112 @@ def test_every_release_url_is_https_and_official():
     # 版本越高的 JDK 要求，必须排在越前面（pick_release 依赖这个顺序）
     limits = [release["min_java"] for release in module.JDTLS_RELEASES]
     assert limits == sorted(limits, reverse=True)
+
+
+def test_release_candidates_are_newest_first(tmp_path):
+    module = load_setup_java()
+    labels = [release["label"] for release in module.release_candidates(21)]
+    assert labels == ["最新快照", "1.31.0", "1.12.0"]
+    assert [release["label"] for release in module.release_candidates(17)] == ["1.31.0", "1.12.0"]
+    assert [release["label"] for release in module.release_candidates(11)] == ["1.12.0"]
+
+
+def test_jdtls_command_keeps_the_required_jvm_flags(tmp_path):
+    target = make_jdtls(tmp_path)
+    command = build_jdtls_command(
+        "/usr/bin/java", str(target), str(tmp_path / "data"), extra_args=["-Xmx2G"]
+    )
+    joined = " ".join(command)
+    # 少任何一个都会让 JDT LS 启动即退出
+    for flag in (
+        "-Declipse.application=org.eclipse.jdt.ls.core.id1",
+        "-Dosgi.bundles.defaultStartLevel=4",
+        "-Declipse.product=org.eclipse.jdt.ls.core.product",
+        "-Dosgi.sharedConfiguration.area=",
+        "-Dosgi.configuration.cascaded=true",
+        "--add-modules=ALL-SYSTEM",
+        "--add-opens",
+        "java.base/java.lang=ALL-UNNAMED",
+    ):
+        assert flag in joined
+    assert "-jar" in command and "-data" in command
+    assert command[-1] == "-Xmx2G"  # 额外参数在最末尾
+
+
+def test_java_home_of_resolves_bin_layout(tmp_path):
+    jdk = tmp_path / "jdk-21"
+    (jdk / "bin").mkdir(parents=True)
+    java = jdk / "bin" / "java"
+    java.write_text("", encoding="utf-8")
+    assert java_home_of(str(java)) == str(jdk)
+    loose = tmp_path / "solo-java"
+    loose.write_text("", encoding="utf-8")
+    assert java_home_of(str(loose)) is None
+
+
+def test_smoke_test_passes_with_a_working_server(tmp_path):
+    """冒烟测试是真的启动一个进程并完成 initialize 握手（用 mock LSP 当替身）。"""
+    module = load_setup_java()
+    command = [sys.executable, str(MOCK_SERVER)]
+    ok, detail = asyncio.run(module.smoke_test_jdtls(command, cwd=tmp_path, timeout=30))
+    assert ok is True and "initialize" in detail
+
+
+def test_smoke_test_reports_failure_with_stderr(tmp_path):
+    """起不来的语言服务必须被识别成失败，并把 stderr 带出来（这是排错的唯一线索）。"""
+    module = load_setup_java()
+    command = [sys.executable, "-c", "import sys; sys.stderr.write('boom: class file version 68.0\n'); sys.exit(1)"]
+    ok, detail = asyncio.run(module.smoke_test_jdtls(command, cwd=tmp_path, timeout=20))
+    assert ok is False
+    assert "boom" in detail
+
+
+def test_install_steps_down_when_newest_release_cannot_start(tmp_path, monkeypatch):
+    """最新版起不来时要自动降级到旧版本，而不是留一个起不来的配置给用户。"""
+    module = load_setup_java()
+    installed: list = []
+
+    def fake_target(release):
+        return tmp_path / release["label"]
+
+    def fake_download(url, target):
+        make_jdtls(target.parent, required_java=21, config_dir=target.name)
+        (target.parent / "jdtls").rename(target)
+        installed.append(target.name)
+
+    async def fake_smoke(command, *, cwd, timeout=150.0):
+        # "最新快照" 在这台机器上起不来（模拟 class file version 不支持），1.31.0 可以
+        if "最新快照" in " ".join(command):
+            return False, "UnsupportedClassVersionError: class file version 68.0"
+        return True, "initialize 成功"
+
+    monkeypatch.setattr(module, "default_target", fake_target)
+    monkeypatch.setattr(module, "download_and_unpack", fake_download)
+    monkeypatch.setattr(module, "smoke_test_jdtls", fake_smoke)
+    chosen, ls_dir, attempts = module.install_with_fallback("/usr/bin/java", 21)
+    assert chosen is not None and chosen["label"] == "1.31.0"
+    assert ls_dir == str(tmp_path / "1.31.0")
+    assert any("68.0" in detail for _label, detail in attempts)
+    assert [label for label, _ in attempts] == ["最新快照", "1.31.0"]
+
+
+def test_install_reports_failure_when_no_release_works(tmp_path, monkeypatch):
+    module = load_setup_java()
+
+    def fake_target(release):
+        return tmp_path / release["label"]
+
+    def fake_download(url, target):
+        make_jdtls(target.parent, required_java=21, config_dir=target.name)
+        (target.parent / "jdtls").rename(target)
+
+    async def always_fail(command, *, cwd, timeout=150.0):
+        return False, "Error: Unable to access jarfile"
+
+    monkeypatch.setattr(module, "default_target", fake_target)
+    monkeypatch.setattr(module, "download_and_unpack", fake_download)
+    monkeypatch.setattr(module, "smoke_test_jdtls", always_fail)
+    chosen, ls_dir, attempts = module.install_with_fallback("/usr/bin/java", 21)
+    assert chosen is None and ls_dir is None
+    assert len(attempts) == 3  # 三个候选都试过了，且都带失败原因
+    assert all(detail for _label, detail in attempts)

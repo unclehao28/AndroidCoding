@@ -259,6 +259,11 @@ python3 scripts/setup-java.py --install   # 按 JDK 版本自动下载匹配的 
 JDK 查找顺序：`navigation.javaHome` → `JAVA_HOME` → `PATH` 里的 `java` → `searchDirs`/各 root 下的
 `prebuilts/jdk/*/linux-x86/bin/java`（AOSP 自带，一般是 11，只够配 1.12.0）→ `/usr/lib/jvm/*/bin/java`。
 
+**安装时会真的启动一次（冒烟测试）**：只校验目录结构是不够的——实测最新快照在 JDK 21 上会
+「启动即退出」（class file version 不支持）。所以脚本会用与运行期完全相同的命令拉起 JDT LS，
+完成 `initialize` 握手才算通过；**起不来就自动降级**到下一个候选版本（最新快照 → 1.31.0 → 1.12.0），
+并把每一档失败时的 stderr 尾部打印出来。三档都起不来则不写配置，并给出具体报错。
+
 配置项（都由脚本写入，不必手工编辑）：
 
 ```json
