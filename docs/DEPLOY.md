@@ -238,6 +238,42 @@ python3 scripts/setup-navigation.py --clangd /home/you/bin/clangd
 
 装好后用 `python3 -m app --config config.json --check-config` 复核，它现在会直接打印 clangd 路径与版本。
 
+## 3.65 Java 语义跳转（Eclipse JDT LS）
+
+C/C++ 用 clangd，Java 用 JDT LS。JDT LS 是 Java 程序、**自带硬性 JDK 要求**，所以脚本按版本匹配：
+
+```bash
+cd ~/android-source-workbench
+python3 scripts/setup-java.py             # 体检：报告 JDK、JDT LS、配置现状与下一步
+python3 scripts/setup-java.py --install   # 按 JDK 版本自动下载匹配的 JDT LS，并写进 config.json
+```
+
+| 机器上的 JDK | 会自动装 | 说明 |
+|---|---|---|
+| 21+ | 最新快照 | 官方 `snapshots/latest` |
+| 17–20 | 1.31.0 | 2024-01 里程碑；**本机用 JDK 17 + 1.31.0 实测 5/5 Java 用例通过** |
+| 11–16 | 1.12.0 | 较老里程碑 |
+| 11 以下 | 不装，并提示先装 JDK | JDT LS 无法运行 |
+
+脚本会先读该版本自带启动脚本里声明的 JDK 要求，与机器上的 `java` 比对，**不匹配就报错退出，不写配置**。
+JDK 查找顺序：`navigation.javaHome` → `JAVA_HOME` → `PATH` 里的 `java` → `searchDirs`/各 root 下的
+`prebuilts/jdk/*/linux-x86/bin/java`（AOSP 自带，一般是 11，只够配 1.12.0）→ `/usr/lib/jvm/*/bin/java`。
+
+配置项（都由脚本写入，不必手工编辑）：
+
+```json
+"navigation": { "javaLsPath": "~/.local/share/asw-jdtls/1.31.0", "javaHome": "/path/to/jdk-17",
+                "javaDataDir": null, "javaArgs": [] }
+```
+
+**必须如实知道的限制**（也是产品约束里"不许把候选说成精准"的一部分）：
+
+- **Soong 不是 Maven/Gradle**：JDT LS 无法导入 AOSP 工程。现在能做的是**同文件/同源码目录内**的解析
+  （局部变量、参数、字段、同目录类）。跨模块依赖（例如 `frameworks/base` 里的类引用
+  `system/core` 的接口）需要单独的导入适配，**尚未完成**；接口会返回 `unavailable` 并说明原因。
+- `/api/health` 的 `navigation.supported.java` 会带上 `classpathSupport: false` 与具体原因，
+  不要把"JDT LS 起来了"当成"AOSP Java 全部支持"。
+
 ## 3.7 语义跳转（P2，C/C++）与 clangd
 
 P2 已接入 **C/C++**（clangd）；Java/Kotlin/Rust/AIDL 明确返回未就绪，不会用文本匹配冒充。

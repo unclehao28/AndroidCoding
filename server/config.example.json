@@ -94,15 +94,23 @@
     "navigation": true
   },
 
-  // 语义跳转（P2，C/C++ 通过 clangd）。默认保守：不起后台索引、实例数很小、空闲即关。
+  // 语义跳转（P2）。C/C++ 走 clangd，Java 走 Eclipse JDT LS；默认保守：不起后台索引、实例数很小、空闲即关。
   // clangdPath 空时按顺序查找：PATH → searchDirs 下的 AOSP prebuilts/clang/host/*/*/bin/clangd。
   // 整套 AOSP 上强烈建议先用 searchDirs 指向 AOSP 根，直接复用仓库自带的 clangd。
+  // Java：javaLsPath 是 JDT LS 的解包目录，javaHome 是 JDK 路径（可运行 scripts/setup-java.py 自动准备）。
+  // 注意 JDT LS 对 JDK 版本有硬要求（最新快照要 Java 21，1.31.0 要 Java 17），AOSP 自带的
+  // prebuilts/jdk/jdk11 通常不够用；版本不匹配时接口会如实报出"JDK 版本不足"而不是静默失败。
+  // Soong 不是 Maven/Gradle：JDT LS 无法直接导入 AOSP 工程，跨模块解析需要单独的导入适配（尚未完成）。
   "navigation": {
     "enabled": true,
     "clangdPath": null,
     "searchDirs": [],
     "clangdArgs": [],
     "compileCommandsDir": null,
+    "javaLsPath": null,
+    "javaHome": null,
+    "javaDataDir": null,
+    "javaArgs": [],
     "backgroundIndex": false,
     "maxInstances": 2,
     "idleShutdownSeconds": 300,

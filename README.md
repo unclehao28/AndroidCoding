@@ -40,6 +40,7 @@ P1 已实现的真实能力：健康状态、工作区列表、按层目录浏�
 - `server/requirements-dev.txt`、`server/requirements-py38-dev.txt`：测试依赖（pytest、httpx）。
 - `server/run.sh`：Linux 启动脚本（自动按解释器版本选择依赖清单）。
 - `scripts/setup-navigation.py`：一键准备语义跳转（找 AOSP → 找 clangd → 写 `config.json`，保留注释并备份）。
+- `scripts/setup-java.py`：Java 侧准备（查 JDK → 按 JDK 版本下载匹配的 JDT LS → 写配置）。
 - `scripts/verify-p2-navigation.py`：用真实语言服务核对 12 条跳转预期（`--direct` 不需要先启动服务）。
 - `scripts/find-source-server.sh`：只读摸排"源码在哪台机器、repo/git 地址是什么"（读 `.repo/manifest.xml` 等证据）。
 - `docs/DEPLOY.md`：公司服务器上的部署、试用范围、AOSP 配置与故障排查。

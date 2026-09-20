@@ -285,6 +285,53 @@ def build_root_entry(path, *, root_id: str | None = None, name: str | None = Non
     }
 
 
+def _find_container(lines: list, key: str, close_char: str) -> tuple:
+    """定位 `"key": [ {` 这类容器的 (起始行, 缩进, 闭合行)。靠缩进区分内层同名符号。"""
+    pattern = re.compile(r'^(\s*)"' + re.escape(key) + r'"\s*:\s*\[' if close_char == "]" else
+                         r'^(\s*)"' + re.escape(key) + r'"\s*:\s*\{')
+    open_index = None
+    indent = ""
+    for index, line in enumerate(lines):
+        match = pattern.match(line.rstrip("\r\n"))
+        if match:
+            open_index = index
+            indent = match.group(1)
+            break
+    if open_index is None:
+        return None
+    close_pattern = re.compile(r"^" + re.escape(indent) + re.escape(close_char) + r"\s*,?\s*$")
+    for index in range(open_index + 1, len(lines)):
+        if close_pattern.match(lines[index].rstrip("\r\n")):
+            return open_index, indent, index
+    return None
+
+
+def _insert_entries(text: str, key: str, close_char: str, rendered: list) -> tuple:
+    """在容器末尾插入若干行（保留注释）。返回 (新文本, 是否改动)。"""
+    lines = text.splitlines(keepends=True)
+    found = _find_container(lines, key, close_char)
+    if found is None:
+        return text, False
+    _open_index, indent, close_index = found
+    last_content = None
+    for index in range(close_index - 1, -1, -1):
+        stripped = lines[index].strip()
+        if stripped and not stripped.startswith("//"):
+            last_content = index
+            break
+    if last_content is None:
+        return text, False
+    newline = "\r\n" if lines[last_content].endswith("\r\n") else "\n"
+    tail = lines[last_content].rstrip("\r\n")
+    if not tail.rstrip().endswith(","):
+        lines[last_content] = tail.rstrip() + "," + newline
+    for offset, body in enumerate(rendered):
+        # 插入多行时，除最后一行都要带逗号（漏了就会生成非法 JSON）
+        suffix = "," if offset < len(rendered) - 1 else ""
+        lines.insert(close_index + offset, indent + "  " + body + suffix + newline)
+    return "".join(lines), True
+
+
 def unique_root_id(entry: dict, existing) -> dict:
     """id 撞车时补 -2、-3……（id 会出现在 URL 参数里，不能重复）"""
     used = {item.get("id") for item in existing if isinstance(item, dict)}
@@ -310,42 +357,93 @@ def add_root_to_text(text: str, entry: dict) -> tuple:
             return text, False, f"roots 里已经有这个路径，未重复添加：{entry['path']}", entry
     entry = unique_root_id(entry, existing)
 
-    lines = text.splitlines(keepends=True)
-    header_index = None
-    indent = ""
-    for index, line in enumerate(lines):
-        match = ROOTS_KEY_LINE.match(line.rstrip("\r\n"))
-        if match:
-            header_index = index
-            indent = match.group(1)
-            break
-    if header_index is None:
-        return text, False, "", entry
-    # 数组闭合行与键同缩进（可能是 "]" 或 "],"）；靠缩进区分 sparsePaths 这类内层数组
-    close_pattern = re.compile(r"^" + re.escape(indent) + r"\]\s*,?\s*$")
-    close_index = None
-    for index in range(header_index + 1, len(lines)):
-        if close_pattern.match(lines[index].rstrip("\r\n")):
-            close_index = index
-            break
-    if close_index is None:
-        return text, False, "", entry
-    last_content = None
-    for index in range(close_index - 1, header_index, -1):
-        stripped = lines[index].strip()
-        if stripped and not stripped.startswith("//"):
-            last_content = index
-            break
-    if last_content is None:
-        return text, False, "", entry  # 空数组，交给整体重写
-
-    newline = "\r\n" if lines[last_content].endswith("\r\n") else "\n"
-    tail = lines[last_content].rstrip("\r\n")
-    if not tail.rstrip().endswith(","):
-        lines[last_content] = tail.rstrip() + "," + newline
     body = json.dumps(entry, ensure_ascii=False)
-    lines.insert(close_index, indent + "  " + body + newline)
-    return "".join(lines), True, f"已登记源码根：{entry['path']}（id={entry['id']}，readonly=true）", entry
+    updated, changed = _insert_entries(text, "roots", "]", [body])
+    if not changed:
+        return text, False, "", entry  # 空数组等特殊情况，交给整体重写
+    return updated, True, f"已登记源码根：{entry['path']}（id={entry['id']}，readonly=true）", entry
+
+
+def scalar_line_pattern(key: str) -> re.Pattern:
+    """匹配 `"key": null` / `"key": "..."` / `"key": true` 这类单值行（不含数组/对象）。"""
+    return re.compile(
+        r'^(\s*)"' + re.escape(key) + r'"\s*:\s*(?:null|"[^"]*"|\d+(?:\.\d+)?|true|false)(\s*,?\s*)$'
+    )
+
+
+def patch_config_values(text: str, updates: dict) -> tuple:
+    """按行替换若干单值配置项，保留注释。返回 (新文本, 改动说明, 没找到的键)。"""
+    changes: list = []
+    missing: list = []
+    lines = text.splitlines(keepends=True)
+    for key, value in updates.items():
+        pattern = scalar_line_pattern(key)
+        hit = False
+        for index, line in enumerate(lines):
+            match = pattern.match(line.rstrip("\r\n"))
+            if not match:
+                continue
+            newline = "\r\n" if line.endswith("\r\n") else "\n"
+            lines[index] = f"{match.group(1)}\"{key}\": {json.dumps(value, ensure_ascii=False)}{match.group(2)}{newline}"
+            changes.append(f"{key} → {json.dumps(value, ensure_ascii=False)}")
+            hit = True
+            break
+        if not hit:
+            missing.append(key)
+    return "".join(lines), changes, missing
+
+
+def write_config_if_valid(target: Path, original: str, updated: str, strategy: str) -> dict:
+    """先写到临时文件并用真正的校验器验证，通过后才备份并替换。
+
+    绝不把一个校验不过的配置留在原地——用户手工填的 roots 比"帮他把配置写进去"重要得多。
+    """
+    if updated == original:
+        return {"changed": False, "strategy": strategy, "backup": None, "problems": [], "message": ""}
+    temp = target.with_name(target.name + ".tmp-check")
+    temp.write_text(updated, encoding="utf-8")
+    try:
+        load_config(temp)
+        problems: list = []
+    except ConfigError as exc:
+        problems = list(exc.messages)
+    finally:
+        temp.unlink(missing_ok=True)
+    if problems:
+        return {"changed": False, "strategy": strategy, "backup": None, "problems": problems, "message": ""}
+    backup = backup_path(target)
+    backup.write_text(original, encoding="utf-8")
+    target.write_text(updated, encoding="utf-8")
+    return {"changed": True, "strategy": strategy, "backup": str(backup), "problems": [], "message": ""}
+
+
+def update_navigation_config(server_dir: Path, updates: dict, *, config_name: str = "config.json") -> dict:
+    """更新 navigation 下的单值配置项（例如 javaLsPath / javaHome），保留注释、校验后写入。
+
+    键已存在 → 按行替换；键还不存在（例如旧配置里没有 java 相关字段）→ 在 navigation 块末尾按行插入，
+    这样不会因为"多了一个键"就把用户配置里所有注释都冲掉。
+    """
+    target, created = ensure_config_file(server_dir, config_name)
+    original = target.read_text(encoding="utf-8")
+    updated, changes, missing = patch_config_values(original, updates)
+    strategy = "按行替换（保留注释）"
+    if missing:
+        rendered = [f"\"{key}\": {json.dumps(updates[key], ensure_ascii=False)}" for key in missing]
+        updated, inserted = _insert_entries(updated, "navigation", "}", rendered)
+        if inserted:
+            changes += [f"{key} → {json.dumps(updates[key], ensure_ascii=False)}（新增）" for key in missing]
+            strategy = "按行替换 + 新增字段（保留注释）"
+            missing = []
+        else:
+            updated = _rewrite_as_json(original, config_updates=updates)
+            strategy = "整体重写（注释会丢失，已备份原文件）"
+            changes = [f"{key} → {json.dumps(updates[key], ensure_ascii=False)}" for key in updates]
+    if updated == original:
+        return {"changed": False, "strategy": strategy, "changes": [], "missing": missing,
+                "backup": None, "problems": [], "configPath": str(target), "created": created}
+    result = write_config_if_valid(target, original, updated, strategy)
+    result.update({"changes": changes, "missing": missing, "configPath": str(target), "created": created})
+    return result
 
 
 def add_source_root(
@@ -374,24 +472,12 @@ def add_source_root(
         return {"changed": False, "strategy": strategy, "message": message, "backup": None,
                 "configPath": str(target), "entry": entry, "problems": []}
 
-    temp = target.with_name(target.name + ".tmp-check")
-    temp.write_text(updated, encoding="utf-8")
-    try:
-        load_config(temp)
-        problems: list = []
-    except ConfigError as exc:
-        problems = list(exc.messages)
-    finally:
-        temp.unlink(missing_ok=True)
-    if problems:
+    result = write_config_if_valid(target, original, updated, strategy)
+    if result["problems"]:
         return {"changed": False, "strategy": strategy, "message": f"未写入，配置校验不通过：{message}",
-                "backup": None, "configPath": str(target), "entry": entry, "problems": problems}
-
-    backup = backup_path(target)
-    backup.write_text(original, encoding="utf-8")
-    target.write_text(updated, encoding="utf-8")
-    return {"changed": True, "strategy": strategy, "message": message, "backup": str(backup),
-            "configPath": str(target), "entry": entry, "problems": [], "created": created}
+                "backup": None, "configPath": str(target), "entry": entry, "problems": result["problems"]}
+    result.update({"message": message, "configPath": str(target), "entry": entry, "created": created})
+    return result
 
 
 def ensure_config_file(server_dir: Path, config_name: str = "config.json") -> tuple:
@@ -440,9 +526,15 @@ def patch_config_text(text: str, *, search_dirs=None, clangd_path=None) -> tuple
     return updated, bool(changes), changes
 
 
-def _rewrite_as_json(text: str, *, search_dirs=None, clangd_path=None, add_root=None) -> str:
+def _rewrite_as_json(text: str, *, search_dirs=None, clangd_path=None, add_root=None, config_updates=None) -> str:
     """整体重写的兜底路径：会丢掉注释，所以调用方必须先备份并提示。"""
     raw = json.loads(strip_json_comments(text))
+    if config_updates:
+        navigation = raw.get("navigation")
+        if not isinstance(navigation, dict):
+            navigation = {}
+            raw["navigation"] = navigation
+        navigation.update(config_updates)
     if add_root:
         roots = raw.get("roots")
         if not isinstance(roots, list):

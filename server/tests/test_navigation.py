@@ -221,13 +221,22 @@ def test_position_out_of_range_is_reported(tmp_path, cpp_tree):
         assert "超出文件范围" in body["reason"]
 
 
-def test_java_is_reported_as_not_implemented(tmp_path, cpp_tree):
+def test_java_without_jdtls_reports_what_is_missing(tmp_path, cpp_tree):
+    """Java 已接入（走 JDT LS），但本机没装时要说清缺什么、怎么补，而不是含糊的"未接入"。"""
     (cpp_tree / "Demo.java").write_text("class Demo {}\n", encoding="utf-8")
     app, _config, _manager = build_app(tmp_path, cpp_tree)
     with TestClient(app) as client:
         body = navigate(client, "Demo.java", line=0, character=6).json()
         assert body["status"] == "unavailable"
-        assert "Java" in body["reason"] and "未接入" in body["reason"]
+        assert "JDT LS" in body["reason"]
+        hints = " ".join(body["hints"])
+        assert "javaLsPath" in hints and "JDK" in hints
+        status = client.get("/api/health").json()["navigation"]
+        assert status["supported"]["java"]["available"] is False
+        assert status["supported"]["java"]["reason"]
+        assert status["supported"]["java"]["classpathSupport"] is False  # Soong 适配未完成要如实标注
+        assert ".kt" in status["notImplemented"]  # 未接入的语言仍在清单里
+
 
 
 def test_unknown_kind_is_rejected(tmp_path, cpp_tree):

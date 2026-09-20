@@ -142,8 +142,8 @@ def test_read_file_hash_changes_with_content(client, sample_tree):
     assert second["totalLines"] == 1
 
 
-def test_navigation_reports_unavailable_without_fake_targets(client):
-    """P2：Java 尚未接入语言服务，必须明确返回未就绪，且不得伪造目标。"""
+def test_navigation_reports_stale_on_version_mismatch_without_fake_targets(client):
+    """版本不一致必须返回 stale（而不是拿旧行号硬跳），且不得伪造目标。"""
     response = client.post(
         "/api/navigation",
         json={
@@ -156,14 +156,35 @@ def test_navigation_reports_unavailable_without_fake_targets(client):
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "unavailable"
+    assert body["status"] == "stale"
     assert body["kind"] == "semantic"
     assert body["targets"] == []
     assert body["sourceVersion"] == "sha256:deadbeef"
-    assert "Java" in body["reason"] and "未接入" in body["reason"]
+    assert "版本" in body["reason"]
     assert body["capability"]["navigation"] is True
     assert body["fallback"]["kind"] == "text"
     assert body["positionUnit"] == "utf-16"
+
+
+def test_navigation_without_java_language_server_is_honest(client):
+    """Java 已接入（JDT LS），但本机没装时必须明确说明缺什么，且不得伪造目标。"""
+    current = client.get("/api/file", params={"workspace": "sample", "path": JAVA_PATH}).json()["hash"]
+    response = client.post(
+        "/api/navigation",
+        json={
+            "workspace": "sample",
+            "path": JAVA_PATH,
+            "kind": "definition",
+            "sourceVersion": current,
+            "position": {"line": 6, "character": 21},
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "unavailable"
+    assert body["targets"] == []
+    assert "JDT LS" in body["reason"] or "JDK" in body["reason"]
+    assert any("javaLsPath" in hint for hint in body["hints"])
 
 
 def test_navigation_rejects_bad_path_and_unknown_workspace(client):

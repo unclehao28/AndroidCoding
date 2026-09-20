@@ -28,8 +28,20 @@ STATUS_STALE = "stale"
 KIND_SEMANTIC = "semantic"
 
 CPP_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".c++", ".h", ".hh", ".hpp", ".hxx", ".h++", ".inl", ".ipp", ".m", ".mm")
+LANGUAGE_LABELS = {"cpp": "C/C++ ", "java": "Java "}
+LANGUAGE_HINTS = {
+    "cpp": [
+        "设置 navigation.clangdPath 指向 clangd，或把 AOSP 根目录加入 navigation.searchDirs（可使用 "
+        "prebuilts/clang/host/linux-x86/*/bin/clangd）"
+    ],
+    "java": [
+        "设置 navigation.javaLsPath 指向 JDT LS 解包目录（可用 scripts/setup-java.py 自动下载），"
+        "必要时用 navigation.javaHome 指定 JDK 21+/17+ 的路径：JDT LS 明确要求较新的 JDK，"
+        "AOSP 自带的 prebuilts/jdk/jdk11 通常不够",
+        "Soong 不是 Maven/Gradle：JDT LS 无法直接导入 AOSP 工程，跨模块解析需要单独的导入适配（未完成）",
+    ],
+}
 KNOWN_UNSUPPORTED = {
-    ".java": "Java：需要 JDT LS 与 Soong/classpath 适配（P2 后半，未接入）",
     ".kt": "Kotlin：需要独立的 Kotlin 语言服务（未接入）",
     ".kts": "Kotlin：未接入",
     ".aidl": "AIDL：未接入（AIDL 编译器产物与接口语义属于后续工作）",
@@ -101,6 +113,7 @@ class NavigationService:
     def status(self) -> dict:
         manager_status = self.manager.status()
         executable, version, source = self.manager.clangd()
+        java = self.manager.java_status()
         return {
             "enabled": self.enabled,
             "featureFlag": self.config.features.navigation,
@@ -113,7 +126,26 @@ class NavigationService:
                     "languages": ["C", "C++"],
                     "positionUnit": "utf-16",
                     "kinds": ["definition", "declaration", "references"],
-                }
+                    "engine": "clangd",
+                },
+                "java": {
+                    "available": bool(java["available"] and self.enabled),
+                    "server": (
+                        f"JDT LS（JDK {java['javaVersion']}）" if java["lsPath"] and java["javaPath"] else None
+                    ),
+                    "path": java["lsPath"],
+                    "javaPath": java["javaPath"],
+                    "javaVersion": java["javaVersion"] or None,
+                    "requiredJava": java["requiredJava"],
+                    "source": java["lsNote"],
+                    "reason": java["reason"] or None,
+                    "languages": ["Java"],
+                    "positionUnit": "utf-16",
+                    "kinds": ["definition", "declaration", "references"],
+                    "engine": "jdt.ls",
+                    "classpathSupport": False,
+                    "note": "Soong 工程导入适配未完成：同文件/同源码目录内的解析可用，跨模块依赖可能为空",
+                },
             },
             "notImplemented": {
                 suffix: reason for suffix, reason in sorted(KNOWN_UNSUPPORTED.items())
@@ -161,12 +193,19 @@ class NavigationService:
             )
             return self._finish(base, started)
 
-        if suffix not in CPP_SUFFIXES:
+        if suffix in CPP_SUFFIXES:
+            language = "cpp"
+        elif suffix == ".java":
+            language = "java"
+        else:
             base["status"] = STATUS_UNAVAILABLE
             base["reason"] = KNOWN_UNSUPPORTED.get(
                 suffix, f"未识别的文件类型（{suffix or '无扩展名'}），语义跳转未接入"
             )
-            base["hints"].append("C/C++ 已接入 clangd；其他语言的能力在 /api/health 的 navigation.notImplemented 中列出")
+            base["hints"].append(
+                "C/C++ 已接入 clangd、Java 已接入 JDT LS；其他语言的能力在 /api/health 的 "
+                "navigation.notImplemented 中列出"
+            )
             return self._finish(base, started)
 
         if kind not in METHOD_BY_KIND:
@@ -210,27 +249,33 @@ class NavigationService:
             make_range(line, word["start"], line, word["end"]) if word else None
         )
 
+        if language == "java":
+            java = self.manager.java_status()
+            if not java["available"]:
+                base["status"] = STATUS_UNAVAILABLE
+                base["reason"] = f"Java 语义跳转不可用：{java['reason']}"
+                base["hints"].extend(LANGUAGE_HINTS["java"])
+                return self._finish(base, started)
+
         try:
-            handle = await self.manager.acquire(workspace_id=root.id, language="cpp")
+            handle = await self.manager.acquire(workspace_id=root.id, language=language)
         except LspProcessError as exc:
             base["status"] = STATUS_UNAVAILABLE
-            base["reason"] = f"C/C++ 语言服务不可用：{exc}"
-            base["hints"].append(
-                "设置 navigation.clangdPath 指向 clangd，或把 AOSP 根目录加入 navigation.searchDirs（可使用 "
-                "prebuilts/clang/host/linux-x86/*/bin/clangd）"
-            )
+            base["reason"] = f"{LANGUAGE_LABELS[language].strip()} 语言服务不可用：{exc}"
+            base["hints"].extend(LANGUAGE_HINTS[language])
             return self._finish(base, started)
 
         base["server"] = {
             "name": handle.spec.display_name,
-            "language": "cpp",
+            "language": language,
             "source": handle.spec.source,
             "workspaceId": handle.workspace_id,
         }
 
+        document_language_id = "java" if language == "java" else "cpp"
         uri = resolved_path.as_uri()
         first_open = not handle.has_document(uri)
-        document_version = handle.open_document(uri, "cpp", snapshot.text, version=1)
+        document_version = handle.open_document(uri, document_language_id, snapshot.text, version=1)
         base["documentVersion"] = document_version
         if first_open:
             # 刚打开的文档先确认语言服务已经收下，避免第一次请求必然失败（见 warm_up_document 注释）

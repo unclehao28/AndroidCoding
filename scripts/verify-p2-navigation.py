@@ -227,12 +227,21 @@ async def run_all(args) -> int:
         navigator = DirectNavigator(args.workspace, config_path)
 
     status = navigator.navigation_status()
-    cpp = (status.get("supported") or {}).get("cpp") or {}
+    supported = status.get("supported") or {}
+    cpp = supported.get("cpp") or {}
+    java = supported.get("java") or {}
     clangd_path = ((status.get("manager") or {}).get("clangd") or {}).get("path")
     print(f"[语言服务] enabled={status.get('enabled')} clangd={clangd_path} cpp可用={cpp.get('available')} 来源={cpp.get('source')}")
+    print(
+        f"[语言服务] java可用={java.get('available')} JDT LS={java.get('path')} "
+        f"JDK={java.get('javaVersion')}（要求 {java.get('requiredJava')}）"
+    )
+    if java.get("reason"):
+        print(f"           java 不就绪原因：{java['reason']}")
     if not status.get("enabled"):
         check("语义跳转已启用", False, "features.navigation 或 navigation.enabled 为 false")
         return 2
+    env_ok = True
     if not cpp.get("available"):
         check(
             "clangd 可用",
@@ -241,6 +250,15 @@ async def run_all(args) -> int:
             + "；可设置 navigation.clangdPath，或把 AOSP 根目录加入 navigation.searchDirs"
             "（AOSP 自带 prebuilts/clang/host/linux-x86/*/bin/clangd）",
         )
+        env_ok = False
+    if not java.get("available"):
+        check("JDT LS 可用", False, java.get("reason") or "未找到 JDT LS；可运行 scripts/setup-java.py")
+        env_ok = False
+    if not env_ok:
+        # 环境不满足时只跑能跑的那部分用例，并把退出码与"全部通过"区分开
+        await run_cases(navigator, cases, args.kind)
+        if isinstance(navigator, DirectNavigator):
+            await navigator.shutdown()
         return 2
 
     print(f"[用例] {len(cases)} 条，工作区 {args.workspace}")

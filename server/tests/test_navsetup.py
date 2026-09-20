@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from app.navsetup import (
     patch_config_file,
     patch_config_text,
     prepare_config,
+    update_navigation_config,
 )
 from conftest import REPO_ROOT, SERVER_DIR
 
@@ -135,6 +137,45 @@ def test_add_root_preserves_comments_and_validates(tmp_path):
     assert added[0].readonly is True and str(added[0].path) == str(tree)
     assert Path(report["backup"]).is_file()
     assert '"roots"' in Path(report["backup"]).read_text(encoding="utf-8")  # 备份是改动前的真实配置
+
+
+def test_update_navigation_config_inserts_multiple_missing_keys(tmp_path):
+    """多行插入必须给行间补逗号，否则会写出非法 JSON（真踩过）。"""
+    server = make_server_mirror(tmp_path)
+    config = server / "config.json"
+    raw = (SERVER_DIR / "config.example.json").read_text(encoding="utf-8")
+    stripped = "".join(
+        line
+        for line in raw.splitlines(True)
+        if not re.match(r'\s*"(javaLsPath|javaHome|javaDataDir|javaArgs)":', line)
+    )
+    config.write_text(stripped, encoding="utf-8")
+    before = config.read_text(encoding="utf-8")
+
+    result = update_navigation_config(server, {"javaLsPath": "/opt/jdtls", "javaHome": "/opt/jdk"})
+    assert result["changed"] is True
+    assert "新增字段" in result["strategy"]  # 不是整体重写
+    text = config.read_text(encoding="utf-8")
+    assert "//" in text  # 注释保留
+    assert before.count("//") == text.count("//")
+    loaded = load_config(config)
+    assert loaded.navigation.java_ls_path == "/opt/jdtls"
+    assert loaded.navigation.java_home == "/opt/jdk"
+    assert not list(server.glob("*.tmp-check"))
+
+
+def test_update_navigation_config_replaces_existing_values(tmp_path):
+    server = make_server_mirror(tmp_path)
+    config = server / "config.json"
+    shutil.copy(SERVER_DIR / "config.example.json", config)
+    first = update_navigation_config(server, {"javaLsPath": "/opt/one"})
+    assert first["changed"] is True and first["missing"] == []
+    second = update_navigation_config(server, {"javaLsPath": "/opt/two"})
+    assert second["changed"] is True
+    assert load_config(config).navigation.java_ls_path == "/opt/two"
+    # 没有任何变化时不写文件、也不产生备份
+    third = update_navigation_config(server, {"javaLsPath": "/opt/two"})
+    assert third["changed"] is False
 
 
 def test_add_root_is_idempotent(tmp_path):

@@ -115,6 +115,11 @@ class NavigationSettings:
     stderr_lines: int = 200
     pch_storage: str = "disk"
     clangd_log_level: str = "error"
+    # Java（Eclipse JDT LS）：解包目录 / JDK / JDT LS 的工作区数据目录 / 额外参数
+    java_ls_path: str | None = None
+    java_home: str | None = None
+    java_data_dir: str | None = None
+    java_args: tuple[str, ...] = ()
 
     def to_public(self) -> dict:
         return {
@@ -123,6 +128,10 @@ class NavigationSettings:
             "clangdArgs": list(self.clangd_args),
             "searchDirs": list(self.search_dirs),
             "compileCommandsDir": self.compile_commands_dir,
+            "javaLsPath": self.java_ls_path,
+            "javaHome": self.java_home,
+            "javaDataDir": self.java_data_dir,
+            "javaArgs": list(self.java_args),
             "backgroundIndex": self.background_index,
             "maxInstances": self.max_instances,
             "idleShutdownSeconds": self.idle_shutdown_seconds,
@@ -341,8 +350,14 @@ NAVIGATION_FLOAT_KEYS = {
     "requestTimeoutSeconds": (1, 600),
     "initializeTimeoutSeconds": (1, 600),
 }
-NAVIGATION_STR_KEYS = ("clangdPath", "compileCommandsDir")
-NAVIGATION_STR_LIST_KEYS = ("clangdArgs", "searchDirs")
+NAVIGATION_STR_KEYS = (
+    "clangdPath",
+    "compileCommandsDir",
+    "javaLsPath",
+    "javaHome",
+    "javaDataDir",
+)
+NAVIGATION_STR_LIST_KEYS = ("clangdArgs", "searchDirs", "javaArgs")
 PCH_STORAGE_VALUES = ("disk", "memory")
 CLANGD_LOG_LEVELS = ("error", "info", "verbose")
 
@@ -418,6 +433,10 @@ def _parse_navigation(value: Any, problems: list[str], warnings: list[str]) -> N
         clangd_args=tuple(settings["clangdArgs"]),
         search_dirs=tuple(settings["searchDirs"]),
         compile_commands_dir=settings["compileCommandsDir"],
+        java_ls_path=settings["javaLsPath"],
+        java_home=settings["javaHome"],
+        java_data_dir=settings["javaDataDir"],
+        java_args=tuple(settings["javaArgs"]),
         background_index=settings["backgroundIndex"],
         max_instances=settings["maxInstances"],
         idle_shutdown_seconds=settings["idleShutdownSeconds"],
