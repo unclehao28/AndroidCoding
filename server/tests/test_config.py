@@ -208,6 +208,25 @@ def test_url_containing_double_slash_survives_comment_stripping(tmp_path):
     assert strip_json_comments(text) == text
 
 
+def test_acceptance_workspace_points_at_the_navigation_fixtures(tmp_path, sample_tree):
+    """自查输出的验收命令必须指向真正带导航用例的工作区，否则用户照着跑会 0 用例。"""
+    from app.__main__ import _acceptance_workspace
+
+    raw = default_raw(sample_tree)
+    raw["roots"] = [
+        {"id": "plain", "name": "普通目录", "path": str(sample_tree), "readonly": True},
+    ]
+    config = build_config(raw, source_path=tmp_path / "config.json")
+    assert _acceptance_workspace(config) == "plain"  # 没有用例时退回第一个
+
+    fixtures = tmp_path / "fixtures"
+    fixtures.mkdir()
+    (fixtures / "navigation-cases.json").write_text('{"cases": []}', encoding="utf-8")
+    raw["roots"].append({"id": "fixtures", "name": "验收夹具", "path": str(fixtures), "readonly": True})
+    config = build_config(raw, source_path=tmp_path / "config.json")
+    assert _acceptance_workspace(config) == "fixtures"
+
+
 def test_invalid_json_reports_location(tmp_path):
     path = tmp_path / "config.json"
     path.write_text('{"roots": [}', encoding="utf-8")

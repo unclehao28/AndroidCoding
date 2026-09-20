@@ -46,6 +46,36 @@ def _requirements_file() -> str:
     return "requirements-py38.txt" if sys.version_info < (3, 10) else "requirements.txt"
 
 
+def _acceptance_workspace(config) -> str:
+    """挑出真正带导航用例的那个工作区（fixtures 里放着 navigation-cases.json）。"""
+    for root in config.roots:
+        try:
+            if (root.path / "navigation-cases.json").is_file() or (root.path / "navigation-cpp").is_dir():
+                return root.id
+        except OSError:
+            continue
+    return config.roots[0].id if config.roots else "fixtures"
+
+
+def _java_status_line(config) -> list:
+    """Java 侧就绪情况：与 /api/health 用的是同一份判断逻辑，避免自查和接口说法不一致。"""
+    from .lsp.manager import LanguageServerManager
+
+    try:
+        status = LanguageServerManager(config.navigation, config.roots).java_status()
+    except Exception as exc:  # noqa: BLE001 - 自查失败不能拦住启动
+        return [f"  语义跳转（Java）：状态检查失败：{exc}"]
+    if status["available"]:
+        return [
+            f"  语义跳转（Java）：JDT LS（JDK {status['javaVersion']}，要求 {status['requiredJava'] or '未声明'}）"
+            f" · {status['lsPath']}"
+        ]
+    return [
+        f"  语义跳转（Java）：未就绪 —— {status['reason']}",
+        "    [提醒] 运行 python3 scripts/setup-java.py --install 可按 JDK 版本自动准备 JDT LS",
+    ]
+
+
 def _print_environment(config, host: str, port: int) -> None:
     import platform
 
@@ -87,7 +117,7 @@ def _print_navigation_environment(config) -> None:
         print("  语义跳转：已在配置中关闭（features.navigation / navigation.enabled）")
         return
     if executable:
-        print(f"  语义跳转：clangd {version}（{executable} · 来源：{source}）")
+        print(f"  语义跳转（C/C++）：clangd {version}（{executable} · 来源：{source}）")
         compile_dirs = [root.compile_commands_dir for root in config.roots if root.compile_commands_dir]
         if config.navigation.compile_commands_dir:
             compile_dirs.append(config.navigation.compile_commands_dir)
@@ -95,13 +125,15 @@ def _print_navigation_environment(config) -> None:
             print(f"    compile_commands 目录：{', '.join(compile_dirs)}")
         else:
             print("    [提醒] 未配置 compile_commands 目录：跨文件/宏相关的跳转可能不准；AOSP 可用 Soong 的 compdb")
-        print(f"    验收：python3 scripts/verify-p2-navigation.py --direct --workspace {config.roots[0].id}")
+        print(f"    验收：python3 scripts/verify-p2-navigation.py --direct --workspace {_acceptance_workspace(config)}")
     else:
-        print(f"  语义跳转：未找到 clangd（{source}）")
+        print(f"  语义跳转（C/C++）：未找到 clangd（{source}）")
         print("    [提醒] C/C++ 跳转会返回未就绪。三种做法：")
         print("            1) navigation.searchDirs 指向 AOSP 根目录，直接复用 prebuilts/clang/host/linux-x86/*/bin/clangd")
         print("            2) navigation.clangdPath 直接写 clangd 绝对路径")
         print("            3) 把 clangd 放进 PATH")
+    for line in _java_status_line(config):
+        print(line)
 
 
 def _print_git_status(config) -> int:
@@ -247,7 +279,10 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     app = create_app(config)
-    print("  未实现：写入（P4）、语义导航（P2）、全库索引（P3）——相关接口会明确返回未就绪")
+    print(
+        "  已实现：目录浏览、文件/行段读取、全库检索（可取消）、C/C++ 与 Java 语义跳转；"
+        "未实现：写入（P4）、全库索引（P3）——相关接口会明确返回未就绪"
+    )
 
     uvicorn.run(app, host=host, port=port, log_level="info")
     return 0

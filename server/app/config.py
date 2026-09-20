@@ -16,7 +16,7 @@ from .errors import ApiError
 from .pathtools import is_within as _is_within
 from .pathtools import normalize_rel_path
 
-VERSION = "0.3.0-p2a"
+VERSION = "0.4.0-p2b"
 API_VERSION = "p2"
 
 ROOT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
