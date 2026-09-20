@@ -87,11 +87,20 @@ def main() -> int:
     )
 
     status, remote_tree = request(base, "GET", "/api/tree", {"workspace": args.remote_workspace, "path": ""})
-    check(
-        "未同步的远程工作区返回明确的 409 而不是普通 404",
-        status == 409 and remote_tree.get("error", {}).get("code") == "workspace_not_synced",
-        f"HTTP {status} code={remote_tree.get('error', {}).get('code')}",
-    )
+    if status == 200:
+        # 本机以前同步过这个远程工作区（缓存目录还在）：改为验证"已同步"这一支的行为
+        check(
+            "远程工作区已同步时可浏览且标记为只读",
+            isinstance(remote_tree.get("entries"), list) and remote_tree.get("readonly") is True,
+            f"entries={len(remote_tree.get('entries') or [])} readonly={remote_tree.get('readonly')}"
+            "（本机已同步过该远程工作区；要验证 409 分支请先删除 .asw-cache 下的缓存目录）",
+        )
+    else:
+        check(
+            "未同步的远程工作区返回明确的 409 而不是普通 404",
+            status == 409 and remote_tree.get("error", {}).get("code") == "workspace_not_synced",
+            f"HTTP {status} code={remote_tree.get('error', {}).get('code')}",
+        )
 
     status, remote_sync_state = request(base, "GET", "/api/workspaces")
     remote_item = next(
@@ -180,18 +189,35 @@ def main() -> int:
         body={"workspace": args.workspace, "path": args.path, "kind": "definition", "sourceVersion": file_body.get("hash"), "position": {"line": 6, "character": 21}},
     )
     check(
-        "语义跳转在 Java 上明确返回未接入，不伪造目标",
-        status == 200 and nav.get("status") == "unavailable" and nav.get("kind") == "semantic" and nav.get("targets") == []
-        and "未接入" in (nav.get("reason") or ""),
-        f"status={nav.get('status')} targets={len(nav.get('targets', []))} reason={(nav.get('reason') or '')[:50]}",
-    )
-    check(
         "导航结果标注坐标基准与能力来源",
         nav.get("positionUnit") == "utf-16" and nav.get("lineBase") == 0 and "capability" in nav,
         f"unit={nav.get('positionUnit')} capability={json.dumps(nav.get('capability', {}), ensure_ascii=False)}",
     )
     status, health_nav = request(base, "GET", "/api/health")
     nav_status = health_nav.get("navigation", {})
+    java_support = (nav_status.get("supported", {}) or {}).get("java", {}) or {}
+    if java_support.get("available"):
+        # Java 已接入（JDT LS + JDK 就绪）：跳转必须有真实目标，且如实标注 Soong/classpath 未适配
+        check(
+            "Java 语义跳转在 JDT LS 就绪时给出真实目标",
+            nav.get("status") in ("resolved", "ambiguous") and len(nav.get("targets", [])) >= 1
+            and nav.get("kind") == "semantic",
+            f"status={nav.get('status')} targets={len(nav.get('targets', []))} server={(nav.get('server') or {}).get('name')}",
+        )
+        check(
+            "Java 能力如实标注 Soong/classpath 未适配",
+            java_support.get("classpathSupport") is False,
+            f"classpathSupport={java_support.get('classpathSupport')}",
+        )
+    else:
+        # JDT LS 不可用：必须说清缺什么（JDT LS / JDK），且绝不伪造目标
+        reason = nav.get("reason") or ""
+        check(
+            "Java 语言服务不可用时说明原因且不伪造目标",
+            nav.get("status") == "unavailable" and nav.get("targets") == []
+            and ("JDT LS" in reason or "JDK" in reason) and nav.get("kind") == "semantic",
+            f"status={nav.get('status')} targets={len(nav.get('targets', []))} reason={reason[:70]}",
+        )
     check(
         "健康状态如实报告语言服务能力矩阵",
         "supported" in nav_status and "notImplemented" in nav_status and nav_status.get("supported", {}).get("cpp", {}).get("available")

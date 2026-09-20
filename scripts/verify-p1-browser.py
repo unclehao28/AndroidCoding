@@ -213,13 +213,21 @@ async def run_checks(cdp: CDP, base: str) -> None:
     check("可以选中远程工作区", selected is not None, str(selected))
     if selected and await cdp.wait_for("document.getElementById('cw-sync').hidden === false", "显示同步按钮"):
         listed = await cdp.evaluate("document.getElementById('cw-list').textContent.replace(/\\s+/g,' ')")
-        check(
-            "未同步的远程工作区给出明确操作提示",
-            "尚未同步" in listed and "--sync" in listed,
-            listed[:120],
-        )
+        unsynced = "尚未同步" in listed
+        if unsynced:
+            check("未同步的远程工作区给出明确操作提示", "尚未同步" in listed and "--sync" in listed, listed[:120])
+        else:
+            # 本机以前同步过（缓存目录还在）：改为验证已同步时树能正常加载
+            check(
+                "远程工作区已同步时目录可正常加载",
+                len(listed.strip()) > 0 and "尚未同步" not in listed,
+                f"{listed[:100]}（本机缓存里已有该远程工作区，故走已同步分支）",
+            )
         await cdp.evaluate("document.querySelector('[data-nav=files]').click(); true")
-        await cdp.wait_for("document.getElementById('cw-list').textContent.includes('尚未同步')", "文件页同样提示未同步")
+        if unsynced:
+            await cdp.wait_for("document.getElementById('cw-list').textContent.includes('尚未同步')", "文件页同样提示未同步")
+        else:
+            await cdp.wait_for("document.getElementById('cw-list').textContent.trim().length > 0", "文件页加载远程目录")
         await cdp.evaluate(CLICK_BY_ID % "'cw-sync'")
         if await cdp.wait_for("document.getElementById('cw-sync-cancel').hidden === false", "同步开始并显示取消按钮", timeout=30):
             banner = await cdp.evaluate("document.getElementById('cw-banner').textContent")

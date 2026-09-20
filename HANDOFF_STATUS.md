@@ -59,7 +59,7 @@ python3 scripts/setup-java.py                     # Java 侧体检；--install �
 | 环境准备脚本（`test_navsetup.py`，26 项） | AOSP 判定（`.repo` / `prebuilts/clang` 单独命中即确定、单个通用标记不算、跳过 node_modules、深度上限）、clangd 探测与来源、按行改写保留注释、**语法损坏时备份并重建后继续跑完探测**、**路径不存在时绝不覆盖配置**、两次备份不互相覆盖、候选目录诊断、`--add-root` 插入位置/id 去重/重复路径幂等/校验不过则不写、**给了源码根就不再扫 /data /home** |
 | 环境准备端到端（每次都在临时目录模拟"服务器仓库 + 一份 AOSP"） | `--add-root`：登记只读根 → 只扫 1 个目录 → 找到自带 clangd → 按行写入（注释保留、备份留住）。空配置：一次运行内备份+重建+探测+写入。无源码时打印候选与 `find` 命令、不硬跑验收 |
 | LSP/导航测试（独立进程 mock LSP） | 分帧、握手、服务端请求应答、超时不影响进程、进程崩溃带 stderr；resolved/ambiguous/空结果/stale/位置越界/实例复用/中文路径/emoji 列号/工作区外目标标记 |
-| 启动服务 + `verify-p1-http.py` / `verify-p1-browser.py` | **26/26** 与 **24/24**（含坐标基准、能力矩阵如实上报、点击标识符显示真实原因、无 JS 异常） |
+| 启动服务 + `verify-p1-http.py` / `verify-p1-browser.py` | **29/29** 与 **24/24**：含坐标基准、能力矩阵如实上报、**Java 在 JDT LS 就绪时给出真实目标 / 不可用时说明缺什么**、远程工作区按实际同步状态断言（不再假设一定未同步） |
 | **真机 clangd 12.0.7**（公司服务器 + AOSP12 prebuilts） | 修复前 **5/12**：失败的 2 条正好是 main.cpp / state.cpp 各自的**第一次请求**，原因 `-32602 trying to get AST for non-added document`（刚 didOpen、AST 未就绪）→ 已修（就绪屏障 + 退避重试）→ **修复后 C++ 7/7 全过**，Java 当时报"未接入" |
 | `scripts/find-source-server.sh`（伪造 AOSP + manifest） | 三类证据全部提取成功，两个 shell 脚本 `bash -n` 通过 |
 
