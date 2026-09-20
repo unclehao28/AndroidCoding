@@ -5,7 +5,8 @@
     ASW_CHROME=/path/to/chrome python scripts/verify-p1-browser.py
 
 它通过 CDP 打开真实页面，按顺序验证：示例模式渲染 → 切换到真实模式 →
-真实检索 → 打开真实文件 → 点击标识符得到「未就绪」→ 真实目录树 → 无 JS 异常。
+真实检索 → 打开真实文件 → 点击标识符得到**真实语义状态**（已解析/未就绪都算通过，取决于本机有没有
+clangd/JDT LS）→ 真实目录树 → 无 JS 异常。
 没有 Chromium 或 websockets 时直接报告跳过，不伪造结果。
 """
 from __future__ import annotations
@@ -117,7 +118,7 @@ class CDP:
 CLICK_BY_ID = "document.getElementById(%s).click(); true"
 
 
-async def run_checks(cdp: CDP, base: str) -> None:
+async def run_checks(cdp: CDP, base: str, java_ready_expected: bool = False) -> None:
     await cdp.call("Runtime.enable")
     await cdp.call("Page.enable")
     await cdp.call("Page.navigate", {"url": base + "/"})
@@ -184,6 +185,7 @@ async def run_checks(cdp: CDP, base: str) -> None:
         "跳转" in note and ("已解析" in reported or "未就绪" in reported or "需要你选择" in reported),
         f"{note} / {definitions[:80]}",
     )
+    # 面板顶部的能力说明必须与 /api/health 报告的一致（Java 就绪时不能还写着"未接入"）。
     cap = await cdp.evaluate("document.getElementById('cw-refs-count').textContent")
     check("引用面板区分语义引用与字面匹配", "字面" in cap or "引用" in cap, cap)
     refs = await cdp.evaluate("document.getElementById('cw-refs').textContent")
@@ -246,6 +248,23 @@ async def run_checks(cdp: CDP, base: str) -> None:
                 "",
             )
 
+    # 面板顶部的能力说明必须与 /api/health 报告的一致（Java 就绪时不能还写着"未接入"）。
+    # 说明文字只在"还没有发起过跳转"时显示，所以重新加载页面再读；放在最后，
+    # 避免重载把前面依赖页面状态的检查（引用面板等）冲掉。
+    await cdp.evaluate("location.href = '/?mode=real&tab=search'; true")
+    if await cdp.wait_for(
+        "document.getElementById('cw-definitions') && !document.getElementById('cw-definitions').textContent.includes('后端未连接')",
+        "重新加载后等待与后端建立连接",
+        timeout=25,
+    ):
+        readiness = await cdp.evaluate("document.getElementById('cw-definitions').textContent")
+        check(
+            "就绪状态如实反映 Java 能力",
+            ("Java：" in readiness) == java_ready_expected
+            and "Java/Kotlin/Rust/AIDL 未接入" not in readiness,
+            f"页面：{readiness[:110]} / 后端 java可用={java_ready_expected}",
+        )
+
     errors = await cdp.evaluate("JSON.stringify(window.__aswErrors||[])")
     check("页面无未捕获 JS 异常", errors in ("[]", None), str(errors))
 
@@ -267,10 +286,14 @@ async def main() -> int:
         check("浏览器验收可执行", False, "未找到 Chromium/Chrome，可用 ASW_CHROME 指定路径")
         return 1
 
+    java_ready_expected = False
     try:
         with urllib.request.urlopen(args.base + "/api/health", timeout=10) as response:
             health = json.loads(response.read().decode("utf-8"))
         check("被检查的服务真实可用", health.get("status") == "ok", args.base)
+        java_ready_expected = bool(
+            ((health.get("navigation") or {}).get("supported") or {}).get("java", {}).get("available")
+        )
     except Exception as error:  # noqa: BLE001
         check("被检查的服务真实可用", False, f"{type(error).__name__}: {error}")
         return 1
@@ -305,7 +328,7 @@ async def main() -> int:
         check("Chromium 远程调试已就绪", target is not None, chrome)
         if target:
             async with websockets.connect(target["webSocketDebuggerUrl"], max_size=20 * 1024 * 1024) as ws:
-                await run_checks(CDP(ws), args.base)
+                await run_checks(CDP(ws), args.base, java_ready_expected)
     finally:
         process.terminate()
         try:

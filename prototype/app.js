@@ -352,8 +352,8 @@
 
   function navigationCapability() {
     const info = (state.serverInfo && state.serverInfo.navigation) || null;
-    const cpp = info && info.supported ? info.supported.cpp : null;
-    return {info: info, cpp: cpp};
+    const supported = (info && info.supported) || {};
+    return {info: info, cpp: supported.cpp || null, java: supported.java || null};
   }
 
   function navigationReadiness() {
@@ -363,14 +363,27 @@
     }
     if (!capability.info) return {ready: false, text: '后端未报告 semantic 能力状态'};
     if (!capability.info.enabled) return {ready: false, text: '语义跳转已在服务器配置中关闭（features.navigation / navigation.enabled）'};
-    if (capability.cpp && capability.cpp.available) {
-      const kinds = (capability.cpp.kinds || NAV_KINDS).map(kind => NAV_KIND_LABELS[kind] || kind).join('/');
-      return {ready: true, text: `C/C++ 就绪：${capability.cpp.server}（支持 ${kinds}）；Java/Kotlin/Rust/AIDL 未接入`};
+    const kinds = (capability.cpp && capability.cpp.kinds ? capability.cpp.kinds : NAV_KINDS)
+      .map(kind => NAV_KIND_LABELS[kind] || kind).join('/');
+    const ready = [];
+    const missing = [];
+    if (capability.cpp && capability.cpp.available) ready.push(`C/C++：${capability.cpp.server}`);
+    else missing.push('C/C++（未找到 clangd）');
+    if (capability.java && capability.java.available) ready.push(`Java：${capability.java.server || 'JDT LS'}`);
+    else missing.push('Java（未就绪：' + ((capability.java && capability.java.reason) || '未找到 JDT LS') + '）');
+    if (ready.length) {
+      return {
+        ready: true,
+        text: `语言服务就绪 —— ${ready.join('；')}（支持 ${kinds}）`
+          + (missing.length ? `；${missing.join('；')}` : '')
+          + '；Kotlin/Rust/AIDL 未接入'
+      };
     }
     return {
       ready: false,
-      text: 'C/C++ 未就绪：服务器上没有找到 clangd',
-      hint: (capability.cpp && capability.cpp.source) || '设置 navigation.clangdPath，或用 navigation.searchDirs 指向 AOSP 根目录（自带 prebuilts/clang/host/linux-x86/*/bin/clangd）'
+      text: '语义跳转未就绪：服务器上没有可用的语言服务',
+      hint: ((capability.cpp && capability.cpp.source) || '')
+        + ((capability.java && capability.java.reason) ? ` ${capability.java.reason}` : '')
     };
   }
 

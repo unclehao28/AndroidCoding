@@ -1,7 +1,7 @@
 # 当前交接状态
 
-更新时间：2026-09-20。版本 `0.4.0-p2b`。当前阶段：**P2 完成（C/C++ 走 clangd、Java 走 JDT LS）**；
-Kotlin/Rust/AIDL 未接入、AOSP Java 的 Soong 导入适配未做。
+更新时间：2026-09-20。版本 `0.4.0-p2b`。当前阶段：**P2 已在公司服务器上真机验证通过（12/12）**：
+C/C++ 走 clangd（AOSP 自带 12.0.7）、Java 走 JDT LS 1.31.0；Kotlin/Rust/AIDL 未接入、AOSP Java 的 Soong 导入适配未做。
 
 ## 本轮完成：P2 下半 —— Java 语义跳转（JDT LS）
 
@@ -52,8 +52,9 @@ python3 scripts/setup-java.py                     # Java 侧体检；--install �
 
 | 命令 | 结果 |
 |---|---|
+| **真机双语言验收（公司服务器）** | **12/12 通过**：C++ 7 条（clangd 12.0.7，AOSP 自带）+ Java 5 条（JDT LS 1.31.0 + JDK 21）。命令：`python3 scripts/verify-p2-navigation.py --direct --workspace fixtures` |
 | `cd server && python -m pytest` | **221 项：218 passed / 3 skipped / 0 failed**（skip=Windows 无法建符号链接） |
-| **真机 JDT LS（最新快照 + JDK 21）** | 下载/解包/写配置都成功，但**启动即退出**（stderr 只有 `WARNING: Using incubator modules` 一行，真正原因被截断）→ 已修：安装时加**冒烟测试**（用运行期同一条命令真的拉起并完成 initialize）+ 失败自动降级，并把每档 stderr 尾部打出来；`/api/navigation` 的进程异常也会带 `server.stderrTail` |
+| **真机 JDT LS 排错过程（值得记住）** | 最新快照 + JDK 21：下载/解包/写配置都成功但**启动即退出**（stderr 只截到 `WARNING: Using incubator modules`）→ 加**冒烟测试**（用运行期同一条命令真的拉起并完成 initialize）+ 失败自动降级；真机上自动降级到 **1.31.0（要求 Java 17，在 JDK 21 上可运行）后 5 条 Java 用例全过**。结论：**JDT LS 最新快照在 Java 21 上跑不起来，别用**（`user.home/.local/share/asw-jdtls/最新快照` 可以删掉） |
 | 冒烟测试本机实测 | 真实 JDT LS 1.31.0 + JDK 17：**5 秒通过**（initialize 成功）；坏命令（jar 不存在）被正确判失败并带出 `Error: Unable to access jarfile ...` |
 | **真实 JDT LS**（1.31.0 + JDK 17）跑 5 条 Java 用例 | **5/5 PASS**：参数、字段声明、字段读取、两个同名局部变量（遮蔽）全部 `resolved`、各 1 个目标、位置与预期一致；首请求即成功，总耗时 11s |
 | `scripts/setup-java.py`（本机实测） | 体检正确报出 `JDK 17` 与"未找到 JDT LS"；`--install --target <已有目录>` 走复用路径：校验"该版本要求 Java 17 = 本机 17"→ 按行写入 `javaLsPath`/`javaHome`（注释保留）+ 备份；`--config` 指向的配置若非法则**拒绝写入** |
@@ -61,14 +62,15 @@ python3 scripts/setup-java.py                     # Java 侧体检；--install �
 | 环境准备脚本（`test_navsetup.py`，26 项） | AOSP 判定（`.repo` / `prebuilts/clang` 单独命中即确定、单个通用标记不算、跳过 node_modules、深度上限）、clangd 探测与来源、按行改写保留注释、**语法损坏时备份并重建后继续跑完探测**、**路径不存在时绝不覆盖配置**、两次备份不互相覆盖、候选目录诊断、`--add-root` 插入位置/id 去重/重复路径幂等/校验不过则不写、**给了源码根就不再扫 /data /home** |
 | 环境准备端到端（每次都在临时目录模拟"服务器仓库 + 一份 AOSP"） | `--add-root`：登记只读根 → 只扫 1 个目录 → 找到自带 clangd → 按行写入（注释保留、备份留住）。空配置：一次运行内备份+重建+探测+写入。无源码时打印候选与 `find` 命令、不硬跑验收 |
 | LSP/导航测试（独立进程 mock LSP） | 分帧、握手、服务端请求应答、超时不影响进程、进程崩溃带 stderr；resolved/ambiguous/空结果/stale/位置越界/实例复用/中文路径/emoji 列号/工作区外目标标记 |
-| 启动服务 + `verify-p1-http.py` / `verify-p1-browser.py` | **29/29** 与 **24/24**：含坐标基准、能力矩阵如实上报、**Java 在 JDT LS 就绪时给出真实目标 / 不可用时说明缺什么**、远程工作区按实际同步状态断言（不再假设一定未同步） |
+| 启动服务 + `verify-p1-http.py` / `verify-p1-browser.py` | **29/29** 与 **25/25**：含坐标基准、能力矩阵如实上报、**Java 在 JDT LS 就绪时给出真实目标 / 不可用时说明缺什么**、远程工作区按实际同步状态断言、页面就绪状态与 `/api/health` 一致 |
 | **真机 clangd 12.0.7**（公司服务器 + AOSP12 prebuilts） | 修复前 **5/12**：失败的 2 条正好是 main.cpp / state.cpp 各自的**第一次请求**，原因 `-32602 trying to get AST for non-added document`（刚 didOpen、AST 未就绪）→ 已修（就绪屏障 + 退避重试）→ **修复后 C++ 7/7 全过**，Java 当时报"未接入" |
 | `scripts/find-source-server.sh`（伪造 AOSP + manifest） | 三类证据全部提取成功，两个 shell 脚本 `bash -n` 通过 |
 
 ## 未完成（禁止对外宣称已实现）
 
-- **Java 的真机状态未通过**：服务器上 JDK 21 + 最新快照会启动即退出（见上表），修复（冒烟测试 +
-  自动降级）已推送但**尚未重跑**。需要在服务器上重跑 `python3 scripts/setup-java.py --install`。
+- **AOSP 工程级的 Java 解析未验证**：真机 12/12 覆盖的是 fixtures 微型工程；真实 AOSP 的 Java 文件
+  依赖 Soong 生成的 classpath，跨模块跳转预期为空（`classpathSupport=false` 已如实标注）。
+- **页面级试用尚未进行**：服务器上还没有 pip，Web 服务起不来（见「下一步」第 1 条）。
 - **AOSP Java 的跨模块解析**：Soong 不是 Maven/Gradle，JDT LS 无法导入工程；同文件/同目录可用，
   跨模块依赖为空（接口如实返回 `unavailable`，`classpathSupport=false`）。导入适配未开始。
 - Kotlin / Rust / AIDL 未接入；AOSP 的 `compile_commands.json`、`--query-driver` 未做；
@@ -83,25 +85,31 @@ python3 scripts/setup-java.py                     # Java 侧体检；--install �
 
 ## 公司侧环境现状（2026-09-18 实测）
 
-- `test-car-znh-compile`：Ubuntu + Python 3.8.10、**无 pip、无 rg**；**本机就有十几份完整 AOSP12 源码树**
-  （`/home/*/aosp12`、`/data/home/*/aosp12`、`/home/jenkins/jobs/droid-12`；`/home` 与 `/data/home` 是同一批目录）。
-  已用 `--add-root /data/home/yangyang/aosp12` 登记为只读工作区（也是 OpenGrok 索引的那份），**不需要 clone**。
-  读的是同事的 home，工作台只读、clangd 用 `--background-index=0` 不往源码树写东西；长期读请与团队确认。
-- 内网 OpenGrok 1.14.13 在 `http://172.20.36.99:8081/source/`（索引 AOSP12）：浏览/检索服务，**不能 clone**，
-  API 返回 401 需凭据，暂不作为数据源。
-- git/repo 服务器地址仍待确认：`bash scripts/find-source-server.sh` 会读 `.manifest.xml` 的 `fetch=` 等证据。
+`test-car-znh-compile`：Ubuntu + Python 3.8.10（**无 pip、无 rg**）+ JDK 21（`/usr/lib/jvm/java-21-openjdk-amd64`）。
+本机就有十几份完整 AOSP12（`/home/*/aosp12` 等，`/home` 与 `/data/home` 是同一批目录），已把
+`/data/home/yangyang/aosp12` 登记为只读工作区（也是 OpenGrok 索引的那份），**不需要 clone**。读的是同事的
+home，工作台只读、clangd 用 `--background-index=0` 不往源码树写东西；长期读请与团队确认。
+内网 OpenGrok 1.14.13 在 `http://172.20.36.99:8081/source/`：只读浏览服务，不能 clone，API 需凭据。
+git/repo 服务器地址仍待确认：`bash scripts/find-source-server.sh` 会读 `.manifest.xml` 的 `fetch=` 等证据。
 
 ## 下一步
 
-1. **你**：在服务器上准备 Java 环境并验收（C++ 已是 7/7，不需要重跑）：
+1. **你**：把页面跑起来试用（P2 已经能用，差的是 Web 服务；服务器上没有 pip）：
 
    ```bash
-   cd ~/android-source-workbench && git pull
-   python3 scripts/setup-java.py --install            # 冒烟测试 + 失败自动降级，会打印每档 stderr
-   python3 scripts/verify-p2-navigation.py --direct --workspace fixtures   # 期望 12/12
+   cd ~/android-source-workbench
+   sudo apt-get install -y python3-pip || (curl -sS https://bootstrap.pypa.io/pip/3.8/get-pip.py -o /tmp/get-pip.py && python3 /tmp/get-pip.py --user)
+   python3 -m pip install --user -r server/requirements-py38.txt      # Python 3.8 专用清单
+   mkdir -p ~/bin && curl -sSL https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz | tar xz -C /tmp && cp /tmp/ripgrep-15.2.0-x86_64-unknown-linux-musl/rg ~/bin/
+   export PATH="$HOME/bin:$PATH"   # 建议写进 ~/.bashrc
+   cd server && ./run.sh           # 监听 127.0.0.1:8787
+   # 公司电脑：ssh -L 8787:127.0.0.1:8787 xuhao@test-car-znh-compile → 浏览器打开 http://127.0.0.1:8787/
    ```
 
-   如果三档都起不来，把"尝试记录"那几行发我（里面是 JDT LS 的真实退出原因）。
-2. **我**：按反馈修 P2 解析问题（`--query-driver`、compdb 探测、超时调整），再做 AOSP Java 的
-   Soong 导入适配（跨模块解析，会单独记录支持矩阵与失败诊断）。
-3. 之后进入 P3（Zoekt 索引），需要源码规模数据（文件数、数据量、机器配置、是否 repo 管理）。
+   页面上切到「真实服务器」→ 选 `aosp12` 工作区即可浏览/检索/点击跳转；没有 rg 时检索会被
+   `pythonMaxFiles` 截断（界面会显示"结果已截断"）。
+2. **下一阶段由你定**（都不需要重做 P1/P2）：
+   - **P3 全库索引（Zoekt）**：让整套 AOSP12 的检索可重复、可增量，不受扫描上限影响；
+   - **AOSP Java 的 Soong 导入适配**：让真实 Java 文件能跨模块解析（难度最大）；
+   - **P4 真实编辑与保存**：带版本冲突检测的原子保存 + 可靠 diff。
+3. **我**：等你选定后开工；当前已知需要补的还有 `--query-driver` 与 compdb 探测（提升 AOSP C++ 精度）。
